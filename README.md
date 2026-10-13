@@ -15,13 +15,11 @@ Controles: flechas o WASD para moverte, **Z / Enter / Espacio** para interactuar
 
 Lo que ya funciona:
 
-- Un pueblo hecho en Tiled por el que te mueves casilla a casilla, con colisiones.
-- Encuentros aleatorios en la hierba alta.
-- Combates contra Pokémon salvajes con el motor real de Pokémon Showdown (daño, tipos, críticos, cambios de estadísticas, estados...).
-- Cambiar de Pokémon, huir, y que los PS se mantengan entre combates.
-- La puerta de la casa cura al equipo; si te debilitan a todos, vuelves a casa.
-
-Los gráficos actuales son provisionales (generados por `tools/gen_assets.py`) para no depender de recursos externos.
+- Los mapas de Pokémon Essentials BES (Pueblo Empanada, Ruta 1, casas...) convertidos a Tiled, con sus tilesets, autotiles, colisiones y saltos de bordillo.
+- Puertas, salidas y conexiones entre mapas; NPCs que se giran y dicen sus textos.
+- Encuentros salvajes con las tablas de `encounters.txt` (de día y de noche) y movimientos aprendidos por nivel de `pokemon.txt`.
+- Combates con el motor real de Pokémon Showdown, con los sprites, fondos y nombres en español de Essentials.
+- Cambiar de Pokémon, huir, y que los PS se mantengan entre combates. Volver a casa o entrar en un Centro Pokémon cura al equipo.
 
 ## Arquitectura
 
@@ -29,47 +27,56 @@ Los gráficos actuales son provisionales (generados por `tools/gen_assets.py`) p
 |---|---|---|
 | Motor de juego | [Phaser 4](https://phaser.io) + TypeScript | Escenas, render, input, animaciones |
 | Empaquetado | [Vite](https://vite.dev) | Servidor de desarrollo y build estático |
-| Mapas | [Tiled](https://www.mapeditor.org) | Edición de mapas (`public/assets/maps/*.tmj`) |
+| Mapas | [Tiled](https://www.mapeditor.org) | Mapas importados de Essentials (`public/assets/essentials/maps/*.tmj`) |
 | Combate | [@pkmn/sim](https://github.com/pkmn/ps) (Showdown) | Toda la lógica de combate, en el navegador |
 | Datos online (siguiente fase) | [Supabase](https://supabase.com) | Cuentas, partidas guardadas, combates/intercambios entre jugadores |
 | Publicación | GitHub Pages | Jugar desde una URL sin servidor propio |
 
 ```
 src/
-  main.ts              configuración de Phaser
+  main.ts              configuración de Phaser (512x384, como Essentials)
   scenes/
-    BootScene.ts       carga de recursos y animaciones
-    WorldScene.ts      mapa, movimiento por casillas, encuentros
+    BootScene.ts       carga de datos de Essentials y fuente
+    WorldScene.ts      mapas, movimiento, eventos, puertas, conexiones y encuentros
     BattleScene.ts     interfaz de combate
     DialogScene.ts     caja de texto del mundo
   battle/
     engine.ts          envoltorio de @pkmn/sim (jugador vs IA)
     protocol.ts        traduce el protocolo de Showdown a eventos y textos en español
   data/
+    essentials.ts      datos importados (especies, movimientos, mapas, encuentros)
     party.ts           equipo del jugador
-    encounters.ts      tablas de encuentros
-public/assets/         tileset, sprites y mapas de Tiled
-tools/gen_assets.py    genera los gráficos provisionales
+public/assets/essentials/  recursos generados por el importador
+tools/import_essentials.py importa un proyecto de Essentials BES
 ```
 
 El simulador de Showdown se carga solo al entrar en el primer combate, así el mapa arranca rápido.
 
-### Editar el mapa en Tiled
+### Importar desde Pokémon Essentials BES
 
-Abre `public/assets/maps/pueblo.tmj` con Tiled. Reglas que entiende el juego:
+Los recursos de `public/assets/essentials/` salen de un proyecto de Essentials BES con:
 
-- Capas de tiles `Suelo` y `Obstaculos`.
-- Propiedades booleanas en los tiles del tileset: `colisiona` (no se puede pisar) y `hierba` (puede salir un Pokémon salvaje).
-- Capa de objetos `Objetos` con un punto llamado `inicio` (posición inicial del jugador).
+```bash
+python3 -m pip install rubymarshal pillow
+python3 tools/import_essentials.py "ruta/a/Pokémon Essentials BES"
+```
 
-Ojo: `npm run gen:assets` regenera el mapa y sobrescribe los cambios hechos a mano.
+El script lee `Data/` (mapas `.rxdata`, tilesets), `Graphics/` y `PBS/`, y lo regenera todo. Así, si cambias mapas o datos en RPG Maker o en los PBS, basta con volver a ejecutarlo.
+
+Cada mapa convertido es un `.tmj` que se abre en Tiled. Las capas `Suelo*` van debajo del jugador y las `Alto*` por encima; la capa `Eventos` guarda puertas, NPCs y textos. La colisión y el terreno (hierba, bordillos, agua) van precalculados en las propiedades `pasos` y `terreno` del mapa, así que si editas un mapa a mano en Tiled esas propiedades no se actualizan solas.
+
+De momento los eventos solo entienden: mostrar texto (hasta la primera elección o condición), transferir al jugador y la dirección/gráfico de la primera página. Los scripts de Ruby (combates de entrenador, regalos, etc.) se ignoran.
+
+### Créditos y licencia de los recursos
+
+Pokémon Essentials BES se distribuye bajo **CC BY-NC-SA 4.0**: este proyecto debe seguir siendo no comercial, mantener los créditos (`public/assets/essentials/CREDITOS.txt`) y compartirse con la misma licencia. Pokémon y sus personajes son propiedad de Nintendo, Game Freak y The Pokémon Company; esto es un fangame sin ánimo de lucro.
 
 ## Hoja de ruta
 
 1. **Base jugable** (hecho): mapa, movimiento, encuentros y combate.
-2. **Recursos de Pokémon Essentials BES**: tilesets, personajes, sprites de Pokémon (`Graphics/`), y datos en español de `PBS/` (especies, movimientos, encuentros) convertidos a JSON con un script.
+2. **Recursos de Pokémon Essentials BES** (hecho): mapas, tilesets, personajes, sprites y datos en español.
 3. **Progresión**: experiencia y subida de nivel, aprender movimientos, captura con Poké Balls, mochila, centro Pokémon, entrenadores con IA.
 4. **Mundo**: varios mapas conectados, NPCs con diálogos, eventos (equivalente a los eventos de RPG Maker).
 5. **Supabase**: inicio de sesión, guardado en la nube, Pokédex.
 6. **Online**: combates entre jugadores (Supabase Realtime + validación con el simulador) e intercambios.
-7. **Pulido**: música y efectos, animaciones de ataques, menús, móvil/táctil.
+7. **Pulido**: música y efectos (los de `Audio/` de Essentials), animaciones de ataques, menús, móvil/táctil.

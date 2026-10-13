@@ -4,9 +4,9 @@ import { WorldScene } from './scenes/WorldScene';
 import { BattleScene } from './scenes/BattleScene';
 import { DialogScene } from './scenes/DialogScene';
 
-// Resolución base estilo GBA (240x160) multiplicada para que se vea nítido.
-export const GAME_WIDTH = 480;
-export const GAME_HEIGHT = 320;
+// Misma resolución que Pokémon Essentials (RPG Maker XP).
+export const GAME_WIDTH = 512;
+export const GAME_HEIGHT = 384;
 
 new Phaser.Game({
   type: Phaser.AUTO,

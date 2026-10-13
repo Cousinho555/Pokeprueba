@@ -1,6 +1,7 @@
-import { Battle, Dex } from '@pkmn/sim';
+import { Battle, Dex, toID } from '@pkmn/sim';
 import type { PokemonSet } from '@pkmn/sim';
 import { ProtocolTranslator, type BattleEvent } from './protocol';
+import { moveName, type PokemonSpec } from '../data/essentials';
 
 export interface MoveOption {
   index: number; // 1-based, como espera Showdown ("move 1")
@@ -19,8 +20,27 @@ export interface SwitchOption {
 }
 
 export interface Combatant {
-  set: PokemonSet;
+  spec: PokemonSpec;
   hp?: number | null;
+}
+
+/** Convierte un Pokémon de Essentials en un set de Showdown. */
+export function toSet(spec: PokemonSpec): PokemonSet {
+  const species = Dex.species.all().find((sp) => sp.num === spec.num && !sp.forme) ?? Dex.species.get(spec.interno);
+  const moves = spec.movimientos.map(toID).filter((id) => Dex.moves.get(id).exists);
+  const ability = Dex.abilities.get(toID(spec.habilidad));
+  return {
+    name: spec.nombre,
+    species: species.name,
+    level: spec.nivel,
+    moves: moves.length ? moves : ['tackle'],
+    ability: ability.exists ? ability.name : species.abilities[0],
+    item: '',
+    nature: 'Hardy',
+    gender: '',
+    evs: { hp: 0, atk: 0, def: 0, spa: 0, spd: 0, spe: 0 },
+    ivs: { hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31 },
+  };
 }
 
 /**
@@ -34,10 +54,10 @@ export class BattleEngine {
 
   constructor(player: Combatant[], foe: Combatant[], opts: { wild: boolean; playerName?: string }) {
     const playerName = opts.playerName ?? 'Jugador';
-    this.translator = new ProtocolTranslator(playerName, opts.wild);
+    this.translator = new ProtocolTranslator(playerName, opts.wild, moveName);
     this.battle = new Battle({ formatid: 'gen9customgame' as never });
-    this.battle.setPlayer('p1', { name: playerName, team: player.map((c) => c.set) });
-    this.battle.setPlayer('p2', { name: opts.wild ? 'Salvaje' : 'Rival', team: foe.map((c) => c.set) });
+    this.battle.setPlayer('p1', { name: playerName, team: player.map((c) => toSet(c.spec)) });
+    this.battle.setPlayer('p2', { name: opts.wild ? 'Salvaje' : 'Rival', team: foe.map((c) => toSet(c.spec)) });
     applyState(this.battle.p1.pokemon, player);
     applyState(this.battle.p2.pokemon, foe);
     // Saltamos la vista previa de equipos del formato "custom game".
@@ -67,7 +87,7 @@ export class BattleEngine {
     if (!req || !('active' in req) || !req.active) return [];
     return req.active[0].moves.map((m, i) => ({
       index: i + 1,
-      name: m.move,
+      name: moveName(m.id),
       pp: m.pp ?? 0,
       maxpp: m.maxpp ?? 0,
       disabled: !!m.disabled || m.pp === 0,
@@ -128,7 +148,7 @@ function applyState(mons: Battle['p1']['pokemon'], state: Combatant[]): void {
   });
 }
 
-/** Tipos de una especie, para colorear los gráficos provisionales. */
-export function speciesTypes(species: string): string[] {
-  return [...Dex.species.get(species).types];
+/** Número de Pokédex de una especie de Showdown (para elegir el sprite). */
+export function speciesNum(species: string): number {
+  return Dex.species.get(species).num;
 }

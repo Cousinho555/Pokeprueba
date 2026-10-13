@@ -1,6 +1,8 @@
 import Phaser from 'phaser';
+import { ESS, registerEssentials, type Especie, type Mundo } from '../data/essentials';
+import { initParty } from '../data/party';
 
-/** Carga los recursos comunes y crea las animaciones antes de entrar al mundo. */
+/** Carga los datos de Essentials, la fuente y el jugador antes de entrar al mundo. */
 export class BootScene extends Phaser.Scene {
   constructor() {
     super('Boot');
@@ -12,21 +14,24 @@ export class BootScene extends Phaser.Scene {
     this.add.rectangle(width / 2, height / 2, 204, 12).setStrokeStyle(1, 0xffffff);
     this.load.on('progress', (v: number) => (bar.width = 200 * v));
 
-    this.load.image('tiles', 'assets/tilesets/tiles.png');
-    this.load.tilemapTiledJSON('pueblo', 'assets/maps/pueblo.tmj');
-    this.load.spritesheet('player', 'assets/sprites/player.png', { frameWidth: 16, frameHeight: 16 });
+    this.load.json('mundo', `${ESS}data/mundo.json`);
+    this.load.json('especies', `${ESS}data/especies.json`);
+    this.load.json('movimientos', `${ESS}data/movimientos.json`);
   }
 
-  create(): void {
-    const dirs = ['down', 'left', 'right', 'up'];
-    dirs.forEach((dir, row) => {
-      this.anims.create({
-        key: `walk-${dir}`,
-        frames: this.anims.generateFrameNumbers('player', { start: row * 4, end: row * 4 + 3 }),
-        frameRate: 8,
-        repeat: -1,
-      });
-    });
-    this.scene.start('World');
+  async create(): Promise<void> {
+    const mundo = this.cache.json.get('mundo') as Mundo;
+    registerEssentials(mundo, this.cache.json.get('especies') as Record<string, Especie>, this.cache.json.get('movimientos'));
+    initParty();
+
+    try {
+      const font = new FontFace('PokemonEmerald', `url(${ESS}fonts/pkmnem.ttf)`);
+      (document.fonts as unknown as Set<FontFace>).add(await font.load());
+    } catch {
+      // Sin la fuente se usa monospace; el juego funciona igual.
+    }
+
+    const { mapa, x, y, dir } = mundo.inicio;
+    this.scene.start('World', { mapId: mapa, x, y, dir });
   }
 }
