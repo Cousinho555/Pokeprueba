@@ -10,6 +10,10 @@ export interface Especie {
   habilidades: string[];
   movimientos: [number, string][];
   especie: string;
+  exp: number;
+  crecimiento: string;
+  captura: number;
+  evoluciones: [string, string, string][];
   posJugadorY: number;
   posEnemigoY: number;
   altitud: number;
@@ -50,6 +54,8 @@ export interface PokemonSpec {
   num: number;
   nombre: string;
   nivel: number;
+  /** Experiencia total acumulada. */
+  exp: number;
   movimientos: string[];
   habilidad: string;
 }
@@ -87,9 +93,67 @@ export function makePokemon(interno: string, nivel: number): PokemonSpec {
     num: e.num,
     nombre: e.nombre,
     nivel,
+    exp: expForLevel(e.crecimiento, nivel),
     movimientos: learned.slice(-4),
     habilidad: e.habilidades[0] ?? '',
   };
+}
+
+// ------------------------------------------------------------------ progresión
+
+/** Experiencia total necesaria para tener un nivel, según el ritmo de crecimiento. */
+export function expForLevel(growth: string, n: number): number {
+  if (n <= 1) return 0;
+  const n3 = n ** 3;
+  switch (growth) {
+    case 'Fast':
+      return Math.floor((4 * n3) / 5);
+    case 'Slow':
+      return Math.floor((5 * n3) / 4);
+    case 'Parabolic':
+      return Math.max(0, Math.floor((6 * n3) / 5 - 15 * n * n + 100 * n - 140));
+    case 'Erratic':
+      if (n <= 50) return Math.floor((n3 * (100 - n)) / 50);
+      if (n <= 68) return Math.floor((n3 * (150 - n)) / 100);
+      if (n <= 98) return Math.floor((n3 * Math.floor((1911 - 10 * n) / 3)) / 500);
+      return Math.floor((n3 * (160 - n)) / 100);
+    case 'Fluctuating':
+      if (n <= 15) return Math.floor((n3 * (Math.floor((n + 1) / 3) + 24)) / 50);
+      if (n <= 36) return Math.floor((n3 * (n + 14)) / 50);
+      return Math.floor((n3 * (Math.floor(n / 2) + 32)) / 50);
+    default: // Medium
+      return n3;
+  }
+}
+
+/** Experiencia que da derrotar a un Pokémon (fórmula clásica: experiencia base × nivel / 7). */
+export function expYield(foe: PokemonSpec, wild: boolean): number {
+  const base = especies[foe.interno]?.exp ?? 50;
+  return Math.max(1, Math.floor(((base * foe.nivel) / 7) * (wild ? 1 : 1.5)));
+}
+
+/** Movimientos que la especie aprende justo en ese nivel. */
+export function movesLearnedAt(interno: string, nivel: number): string[] {
+  return (especies[interno]?.movimientos ?? []).filter(([l]) => l === nivel).map(([, m]) => m);
+}
+
+/** Especie a la que evoluciona por nivel, si ya le toca. */
+export function levelEvolution(spec: PokemonSpec): string | null {
+  for (const [target, method, param] of especies[spec.interno]?.evoluciones ?? []) {
+    if ((method === 'Level' || method === 'LevelForm0') && spec.nivel >= Number(param) && especies[target]) {
+      return target;
+    }
+  }
+  return null;
+}
+
+/** Cambia la especie de un Pokémon (evolución), manteniendo nivel, experiencia y movimientos. */
+export function evolve(spec: PokemonSpec, target: string): void {
+  const e = especies[target];
+  spec.interno = target;
+  spec.num = e.num;
+  spec.nombre = e.nombre;
+  if (!e.habilidades.includes(spec.habilidad)) spec.habilidad = e.habilidades[0] ?? spec.habilidad;
 }
 
 /** Tirada de encuentro salvaje para un mapa, o null si el mapa no tiene encuentros de tierra. */

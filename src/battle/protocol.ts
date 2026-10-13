@@ -64,6 +64,8 @@ export class ProtocolTranslator {
   }
 
   private translateLine(line: string): BattleEvent[] | null {
+    // El movimiento oculto de lanzar Poké Ball (ver engine.ts) no se muestra.
+    if (line.includes('pokeballthrow') || line.includes('Poke Ball Throw')) return null;
     const p = line.split('|').slice(1);
     const [cmd, a, b, c] = p;
     const text = (t: string): BattleEvent => ({ kind: 'text', text: t });

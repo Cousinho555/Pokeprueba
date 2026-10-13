@@ -7,12 +7,26 @@ export interface PartyMember {
   hp: number | null;
 }
 
-/** Equipo del jugador (provisional, hasta tener elección de inicial y guardado en Supabase). */
+export const MAX_PARTY = 6;
+
+/** Equipo del jugador, Pokémon guardados en el PC y mochila. */
 export const party: PartyMember[] = [];
+export const pc: PartyMember[] = [];
+export const bag: Record<string, number> = {};
+
+/** Poké Balls que entiende el juego: nombre y multiplicador de captura. */
+export const BALLS: Record<string, { nombre: string; ratio: number }> = {
+  POKEBALL: { nombre: 'Poké Ball', ratio: 1 },
+  GREATBALL: { nombre: 'Super Ball', ratio: 1.5 },
+  ULTRABALL: { nombre: 'Ultra Ball', ratio: 2 },
+};
 
 export function initParty(): void {
   party.length = 0;
+  pc.length = 0;
   party.push({ spec: makePokemon('CHARMANDER', 14), hp: null }, { spec: makePokemon('PIKACHU', 12), hp: null });
+  for (const k of Object.keys(bag)) delete bag[k];
+  Object.assign(bag, { POKEBALL: 10, GREATBALL: 3 });
 }
 
 export function healParty(): void {
@@ -21,4 +35,14 @@ export function healParty(): void {
 
 export function partyCanFight(): boolean {
   return party.some((m) => m.hp !== 0);
+}
+
+/** Añade un Pokémon capturado: al equipo si cabe, si no al PC. Devuelve dónde ha ido. */
+export function addCaught(member: PartyMember): 'equipo' | 'pc' {
+  if (party.length < MAX_PARTY) {
+    party.push(member);
+    return 'equipo';
+  }
+  pc.push(member);
+  return 'pc';
 }
