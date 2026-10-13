@@ -1,0 +1,21 @@
+{
+  "name": "pokeprueba",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "gen:assets": "python3 tools/gen_assets.py"
+  },
+  "dependencies": {
+    "@pkmn/sim": "^0.10.11",
+    "phaser": "^4.2.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4"
+  }
+}
