@@ -30,7 +30,11 @@ function parseHP(s: string): { hp: number; maxhp: number } {
 }
 
 export class ProtocolTranslator {
-  constructor(private playerName: string, private wild: boolean) {}
+  constructor(
+    private playerName: string,
+    private wild: boolean,
+    private moveName: (name: string) => string = (n) => n,
+  ) {}
 
   private side(ident: string): SideID {
     return ident.startsWith('p1') ? 'p1' : 'p2';
@@ -77,7 +81,7 @@ export class ProtocolTranslator {
         return [{ kind: 'switch', side, name, species, level, hp, maxhp }, text(msg)];
       }
       case 'move':
-        return [text(`¡${this.who(a, true)} usó ${b}!`)];
+        return [text(`¡${this.who(a, true)} usó ${this.moveName(b)}!`)];
       case '-damage':
       case '-heal':
       case '-sethp': {

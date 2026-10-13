@@ -1,22 +1,16 @@
 import Phaser from 'phaser';
-import type { PokemonSet } from '@pkmn/sim';
 import type { BattleEngine } from '../battle/engine';
 import type { BattleEvent, SideID } from '../battle/protocol';
+import { ESS, especies, type Especie, type PokemonSpec } from '../data/essentials';
 import { party } from '../data/party';
+import { textStyle } from '../ui';
 
 export interface BattleData {
-  foe: PokemonSet;
+  foe: PokemonSpec;
+  /** Nombre del fondo de Essentials (Field, IndoorB...). */
+  background: string;
   onEnd: (result: 'win' | 'lose' | 'run') => void;
 }
-
-const TYPE_COLORS: Record<string, number> = {
-  Normal: 0xa8a878, Fire: 0xf08030, Water: 0x6890f0, Grass: 0x78c850, Electric: 0xf8d030,
-  Ice: 0x98d8d8, Fighting: 0xc03028, Poison: 0xa040a0, Ground: 0xe0c068, Flying: 0xa890f0,
-  Psychic: 0xf85888, Bug: 0xa8b820, Rock: 0xb8a038, Ghost: 0x705898, Dragon: 0x7038f8,
-  Dark: 0x705848, Steel: 0xb8b8d0, Fairy: 0xee99ac,
-};
-
-const FONT = { fontFamily: 'monospace', color: '#303030' };
 
 interface MenuItem {
   label: string;
@@ -24,13 +18,23 @@ interface MenuItem {
 }
 
 interface SideView {
-  sprite: Phaser.GameObjects.Container;
+  sprite: Phaser.GameObjects.Image;
   info: Phaser.GameObjects.Container;
   hpBar: Phaser.GameObjects.Rectangle;
   hpText?: Phaser.GameObjects.Text;
   hp: number;
   maxhp: number;
 }
+
+// Posiciones para una pantalla de 512x384. Los sprites de BES se colocan por la parte
+// inferior del bitmap; BattlerPlayerY/BattlerEnemyY compensan el hueco transparente.
+const FOE_X = 384;
+const FOE_Y = 176;
+const FOE_FEET_Y = 150;
+const PLAYER_X = 128;
+const PLAYER_FEET_Y = 260;
+const SPRITE_SCALE = 2;
+const BOX_Y = 288;
 
 /**
  * Pantalla de combate. La lógica la lleva @pkmn/sim (cargado bajo demanda para
@@ -39,7 +43,7 @@ interface SideView {
 export class BattleScene extends Phaser.Scene {
   private data_!: BattleData;
   private engine!: BattleEngine;
-  private speciesTypes!: (s: string) => string[];
+  private speciesNum!: (s: string) => number;
   private message!: Phaser.GameObjects.Text;
   private menuLayer!: Phaser.GameObjects.Container;
   private views = {} as Record<SideID, SideView>;
@@ -58,7 +62,9 @@ export class BattleScene extends Phaser.Scene {
   }
 
   async create(): Promise<void> {
-    this.drawScene();
+    const bg = this.data_.background || 'Field';
+    await this.loadAssets(bg);
+    this.drawScene(bg);
     this.message.setText('Cargando combate...');
 
     const kb = this.input.keyboard!;
@@ -67,60 +73,81 @@ export class BattleScene extends Phaser.Scene {
     this.input.on('pointerdown', next);
 
     const mod = await import('../battle/engine');
-    this.speciesTypes = mod.speciesTypes;
+    this.speciesNum = mod.speciesNum;
 
     // Solo combaten los Pokémon del equipo que no estén debilitados.
     this.partyIndexes = party.map((m, i) => (m.hp === 0 ? -1 : i)).filter((i) => i >= 0);
     this.engine = new mod.BattleEngine(
       this.partyIndexes.map((i) => party[i]),
-      [{ set: this.data_.foe }],
+      [{ spec: this.data_.foe }],
       { wild: true, playerName: 'Jugador' },
     );
     await this.playEvents(this.engine.drainEvents());
     this.loop();
   }
 
+  /** Sprites de los Pokémon implicados y el fondo de combate. */
+  private loadAssets(bg: string): Promise<void> {
+    const want = (key: string, url: string) => {
+      if (!this.textures.exists(key)) this.load.image(key, url);
+    };
+    want(`front:${this.data_.foe.num}`, `${ESS}battlers/front/${this.data_.foe.num}.png`);
+    for (const m of party) want(`back:${m.spec.num}`, `${ESS}battlers/back/${m.spec.num}.png`);
+    want(`bg:${bg}`, `${ESS}battlebacks/battlebg${bg}.png`);
+    want(`foebase:${bg}`, `${ESS}battlebacks/enemybase${bg}.png`);
+    want(`playerbase:${bg}`, `${ESS}battlebacks/playerbase${bg}.png`);
+    return new Promise((resolve) => {
+      this.load.once(Phaser.Loader.Events.COMPLETE, () => resolve());
+      this.load.start();
+    });
+  }
+
   // ---------------------------------------------------------------- dibujo
 
-  private drawScene(): void {
-    const { width } = this.scale;
-    const g = this.add.graphics();
-    g.fillGradientStyle(0xb8e0f8, 0xb8e0f8, 0xf0f8e0, 0xf0f8e0).fillRect(0, 0, width, 224);
-    g.fillStyle(0x98c878).fillEllipse(350, 120, 170, 40);
-    g.fillStyle(0x98c878).fillEllipse(120, 212, 200, 44);
+  private drawScene(bg: string): void {
+    const { width, height } = this.scale;
+    if (this.textures.exists(`bg:${bg}`)) this.add.image(0, 0, `bg:${bg}`).setOrigin(0);
+    if (this.textures.exists(`foebase:${bg}`)) this.add.image(FOE_X, FOE_Y, `foebase:${bg}`).setOrigin(0.5, 0.75);
+    if (this.textures.exists(`playerbase:${bg}`)) this.add.image(PLAYER_X, BOX_Y, `playerbase:${bg}`).setOrigin(0.5, 1);
 
     // Caja de texto inferior
-    g.fillStyle(0x283040).fillRect(0, 224, width, 96);
-    g.fillStyle(0xf8f8f8).fillRoundedRect(6, 230, width - 12, 84, 6);
-    this.message = this.add.text(20, 242, '', { ...FONT, fontSize: '17px', wordWrap: { width: width - 40 } });
-    this.menuLayer = this.add.container(0, 0);
+    const g = this.add.graphics().setDepth(50);
+    g.fillStyle(0x283040).fillRect(0, BOX_Y, width, height - BOX_Y);
+    g.fillStyle(0xf8f8f8).fillRoundedRect(6, BOX_Y + 6, width - 12, height - BOX_Y - 12, 6);
+    this.message = this.add.text(22, BOX_Y + 16, '', { ...textStyle(26), wordWrap: { width: width - 44 } }).setDepth(51);
+    this.menuLayer = this.add.container(0, 0).setDepth(52);
   }
 
   /** Caja con nombre, nivel y barra de PS de un lado. */
   private makeInfoBox(side: SideID, name: string, level: number): Phaser.GameObjects.Container {
-    const [x, y] = side === 'p2' ? [16, 18] : [250, 140];
-    const h = side === 'p1' ? 62 : 46;
+    const [x, y] = side === 'p2' ? [12, 24] : [268, 186];
+    const h = side === 'p1' ? 84 : 62;
     const box = this.add.graphics();
-    box.fillStyle(0xf8f8e8).fillRoundedRect(0, 0, 214, h, 6);
-    box.lineStyle(2, 0x404040).strokeRoundedRect(0, 0, 214, h, 6);
-    return this.add.container(x, y, [
-      box,
-      this.add.text(10, 6, `${name}  Nv.${level}`, { ...FONT, fontSize: '15px' }),
-      this.add.text(10, 27, 'PS', { ...FONT, fontSize: '12px', color: '#f8a800' }),
-      this.add.rectangle(36, 32, 164, 8, 0x505050).setOrigin(0, 0.5),
-    ]);
+    box.fillStyle(0xf8f8e8).fillRoundedRect(0, 0, 232, h, 8);
+    box.lineStyle(3, 0x404040).strokeRoundedRect(0, 0, 232, h, 8);
+    return this.add
+      .container(x, y, [
+        box,
+        this.add.text(12, 4, name, textStyle(26)),
+        this.add.text(220, 4, `Nv${level}`, textStyle(22)).setOrigin(1, 0),
+        this.add.text(14, 37, 'PS', textStyle(18, '#f8a800')),
+        this.add.rectangle(44, 46, 176, 10, 0x505050).setOrigin(0, 0.5),
+      ])
+      .setDepth(40);
   }
 
-  /** Gráfico provisional: círculo del color del tipo con la inicial de la especie. */
-  private makeSprite(side: SideID, species: string): Phaser.GameObjects.Container {
-    const [x, y] = side === 'p2' ? [350, 92] : [120, 172];
-    const r = side === 'p2' ? 32 : 42;
-    const types = this.speciesTypes(species);
-    const c = this.add.container(x, y);
-    c.add(this.add.circle(0, 0, r, TYPE_COLORS[types[0]] ?? 0x999999).setStrokeStyle(3, 0x303030));
-    if (types[1]) c.add(this.add.circle(0, 0, r * 0.45, TYPE_COLORS[types[1]] ?? 0x999999));
-    c.add(this.add.text(0, 0, species.slice(0, 2), { ...FONT, fontSize: `${r}px`, color: '#ffffff', stroke: '#303030', strokeThickness: 4 }).setOrigin(0.5));
-    return c;
+  /** Sprite de Essentials (frontal para el rival, de espaldas para el jugador). */
+  private makeSprite(side: SideID, species: string): Phaser.GameObjects.Image {
+    const num = this.speciesNum(species);
+    const meta: Especie | undefined = Object.values(especies).find((e) => e.num === num);
+    const key = side === 'p2' ? `front:${num}` : `back:${num}`;
+    const sprite = this.add.image(0, 0, this.textures.exists(key) ? key : '__MISSING').setScale(SPRITE_SCALE).setOrigin(0.5, 1);
+    if (side === 'p2') {
+      sprite.setPosition(FOE_X, FOE_FEET_Y + ((meta?.posEnemigoY ?? 0) - (meta?.altitud ?? 0)) * SPRITE_SCALE);
+    } else {
+      sprite.setPosition(PLAYER_X, PLAYER_FEET_Y + (meta?.posJugadorY ?? 0) * SPRITE_SCALE);
+    }
+    return sprite.setDepth(side === 'p2' ? 10 : 20);
   }
 
   private setHP(side: SideID, hp: number, maxhp: number, animate: boolean): Promise<void> {
@@ -132,14 +159,14 @@ export class BattleScene extends Phaser.Scene {
     const color = ratio > 0.5 ? 0x48d048 : ratio > 0.2 ? 0xf8c800 : 0xe03030;
     v.hpText?.setText(`${hp}/${v.maxhp}`);
     if (!animate) {
-      v.hpBar.width = 160 * ratio;
+      v.hpBar.width = 172 * ratio;
       v.hpBar.fillColor = color;
       return Promise.resolve();
     }
     return new Promise((resolve) => {
       this.tweens.add({
         targets: v.hpBar,
-        width: 160 * ratio,
+        width: 172 * ratio,
         duration: 450,
         onComplete: () => {
           v.hpBar.fillColor = color;
@@ -162,13 +189,13 @@ export class BattleScene extends Phaser.Scene {
           prev?.sprite.destroy();
           prev?.info.destroy();
           const info = this.makeInfoBox(ev.side, ev.name, ev.level);
-          const hpBar = this.add.rectangle(38, 32, 160, 4, 0x48d048).setOrigin(0, 0.5);
-          const hpText = ev.side === 'p1' ? this.add.text(120, 40, '', { ...FONT, fontSize: '14px' }) : undefined;
+          const hpBar = this.add.rectangle(46, 46, 172, 6, 0x48d048).setOrigin(0, 0.5);
+          const hpText = ev.side === 'p1' ? this.add.text(220, 52, '', textStyle(22)).setOrigin(1, 0) : undefined;
           info.add(hpText ? [hpBar, hpText] : [hpBar]);
           const sprite = this.makeSprite(ev.side, ev.species);
           this.views[ev.side] = { sprite, info, hpBar, hpText, hp: ev.hp, maxhp: ev.maxhp };
           sprite.setScale(0);
-          this.tweens.add({ targets: sprite, scale: 1, duration: 250 });
+          this.tweens.add({ targets: sprite, scale: SPRITE_SCALE, duration: 250 });
           await this.setHP(ev.side, ev.hp, ev.maxhp, false);
           break;
         }
@@ -239,25 +266,37 @@ export class BattleScene extends Phaser.Scene {
 
   private async pickAction(): Promise<'run' | { kind: 'move' | 'switch'; index: number }> {
     for (;;) {
-      const moves = this.engine.moves;
       const active = this.engine.switches.find((s) => s.active);
-      this.message.setText(`¿Qué debería hacer ${active?.name}?`);
-      const slot = (i: number): MenuItem => {
-        const m = moves[i];
-        return m ? { label: `${m.name} ${m.pp}/${m.maxpp}`, enabled: !m.disabled } : { label: '-', enabled: false };
-      };
-      // Rejilla 3x2: [ataque1, ataque2, POKÉMON] / [ataque3, ataque4, HUIR]
-      const items: MenuItem[] = [
-        slot(0), slot(1), { label: 'POKÉMON', enabled: this.engine.switches.filter((s) => !s.active && s.hp > 0).length > 0 },
-        slot(2), slot(3), { label: 'HUIR', enabled: true },
-      ];
-      const choice = await this.menu(items, 3, [28, 200, 392], 268, 26);
-      if (choice === 5) return 'run';
-      if (choice === 2) {
+      // Menú principal, como Essentials: mensaje a la izquierda y opciones a la derecha.
+      this.message.setWordWrapWidth(270).setText(`¿Qué debería hacer ${active?.name}?`);
+      const canSwitch = this.engine.switches.some((s) => !s.active && s.hp > 0);
+      const main = await this.menu(
+        [
+          { label: 'LUCHAR', enabled: true },
+          { label: 'MOCHILA', enabled: false },
+          { label: 'POKÉMON', enabled: canSwitch },
+          { label: 'HUIR', enabled: true },
+        ],
+        2, [300, 410], BOX_Y + 14, 36,
+      );
+      this.message.setWordWrapWidth(this.scale.width - 44).setText('');
+      if (main === 3) return 'run';
+      if (main === 2) {
         const idx = await this.pickSwitch(true);
         if (idx != null) return { kind: 'switch', index: idx };
         continue;
       }
+      // Ataques en rejilla 2x2 y "Atrás" a la derecha.
+      const moves = this.engine.moves;
+      const slot = (i: number): MenuItem => {
+        const m = moves[i];
+        return m ? { label: m.name, enabled: !m.disabled } : { label: '-', enabled: false };
+      };
+      const choice = await this.menu(
+        [slot(0), slot(1), { label: 'Atrás', enabled: true }, slot(2), slot(3), { label: '', enabled: false }],
+        3, [36, 226, 420], BOX_Y + 14, 36,
+      );
+      if (choice === 2) continue;
       const moveIdx = choice < 2 ? choice : choice - 1;
       return { kind: 'move', index: moves[moveIdx].index };
     }
@@ -272,7 +311,7 @@ export class BattleScene extends Phaser.Scene {
       enabled: !o.active && o.hp > 0,
     }));
     if (cancellable) items.push({ label: 'Atrás', enabled: true });
-    const choice = await this.menu(items, 2, [24, 250], 244, 22);
+    const choice = await this.menu(items, 2, [36, 280], BOX_Y + 10, 26);
     if (cancellable && choice === items.length - 1) return null;
     return opts[choice].index;
   }
@@ -284,13 +323,13 @@ export class BattleScene extends Phaser.Scene {
     const texts = items.map((it, i) =>
       this.add
         .text(xs[i % cols], y0 + Math.floor(i / cols) * dy, it.label, {
-          ...FONT, fontSize: '15px', color: it.enabled ? '#303030' : '#a0a0a0',
+          ...textStyle(24, it.enabled ? '#484848' : '#b0b0b0'),
         })
         .setInteractive({ useHandCursor: it.enabled }),
     );
-    const cursor = this.add.text(0, 0, '▶', { ...FONT, fontSize: '15px' });
+    const cursor = this.add.text(0, 0, '▶', textStyle(20));
     this.menuLayer.add([...texts, cursor]);
-    const draw = () => cursor.setPosition(texts[sel].x - 16, texts[sel].y);
+    const draw = () => cursor.setPosition(texts[sel].x - 22, texts[sel].y + 2);
     draw();
 
     return new Promise((resolve) => {
