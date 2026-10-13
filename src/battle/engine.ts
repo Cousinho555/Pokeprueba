@@ -5,6 +5,7 @@ import { moveName, type PokemonSpec } from '../data/essentials';
 
 export interface MoveOption {
   index: number; // 1-based, como espera Showdown ("move 1")
+  id: string;
   name: string;
   pp: number;
   maxpp: number;
@@ -23,6 +24,21 @@ export interface Combatant {
   spec: PokemonSpec;
   hp?: number | null;
 }
+
+/**
+ * Showdown no sabe capturar Pokémon. Para lanzar una Poké Ball sin que el
+ * jugador ataque, se le da un movimiento oculto que no hace nada: así el rival
+ * actúa con normalidad en ese turno.
+ */
+const BALL_MOVE = 'pokeballthrow';
+const dex = Dex.mod('pokeprueba', {
+  Moves: {
+    [BALL_MOVE]: {
+      num: -1000, name: 'Poke Ball Throw', accuracy: true, basePower: 0, category: 'Status',
+      pp: 64, priority: 7, flags: {}, target: 'self', type: '???', onTryMove: () => null,
+    },
+  },
+} as never);
 
 /** Convierte un Pokémon de Essentials en un set de Showdown. */
 export function toSet(spec: PokemonSpec): PokemonSet {
@@ -55,8 +71,9 @@ export class BattleEngine {
   constructor(player: Combatant[], foe: Combatant[], opts: { wild: boolean; playerName?: string }) {
     const playerName = opts.playerName ?? 'Jugador';
     this.translator = new ProtocolTranslator(playerName, opts.wild, moveName);
-    this.battle = new Battle({ formatid: 'gen9customgame' as never });
-    this.battle.setPlayer('p1', { name: playerName, team: player.map((c) => toSet(c.spec)) });
+    this.battle = new Battle({ formatid: 'gen9customgame' as never }, dex);
+    const withBall = (set: PokemonSet) => ({ ...set, moves: [...set.moves, BALL_MOVE] });
+    this.battle.setPlayer('p1', { name: playerName, team: player.map((c) => withBall(toSet(c.spec))) });
     this.battle.setPlayer('p2', { name: opts.wild ? 'Salvaje' : 'Rival', team: foe.map((c) => toSet(c.spec)) });
     applyState(this.battle.p1.pokemon, player);
     applyState(this.battle.p2.pokemon, foe);
@@ -85,13 +102,16 @@ export class BattleEngine {
   get moves(): MoveOption[] {
     const req = this.battle.p1.activeRequest;
     if (!req || !('active' in req) || !req.active) return [];
-    return req.active[0].moves.map((m, i) => ({
-      index: i + 1,
-      name: moveName(m.id),
-      pp: m.pp ?? 0,
-      maxpp: m.maxpp ?? 0,
-      disabled: !!m.disabled || m.pp === 0,
-    }));
+    return req.active[0].moves
+      .map((m, i) => ({
+        index: i + 1,
+        id: m.id,
+        name: moveName(m.id),
+        pp: m.pp ?? 0,
+        maxpp: m.maxpp ?? 0,
+        disabled: !!m.disabled || m.pp === 0,
+      }))
+      .filter((m) => m.id !== BALL_MOVE);
   }
 
   get switches(): SwitchOption[] {
@@ -107,6 +127,39 @@ export class BattleEngine {
   chooseMove(index: number): void {
     this.battle.choose('p1', `move ${index}`);
     this.runAI();
+  }
+
+  /** Turno en el que el jugador lanza una Poké Ball que no ha atrapado al rival. */
+  chooseBallTurn(): void {
+    const req = this.battle.p1.activeRequest;
+    const idx = req && 'active' in req && req.active ? req.active[0].moves.findIndex((m) => m.id === BALL_MOVE) : -1;
+    this.battle.choose('p1', idx >= 0 ? `move ${idx + 1}` : 'default');
+    this.runAI();
+  }
+
+  /**
+   * Fórmula de captura de 3ª/4ª generación. Devuelve cuántas veces se sacude
+   * la Poké Ball (0-3) o 4 si el Pokémon queda atrapado.
+   */
+  tryCatch(catchRate: number, ballRatio: number): number {
+    const foe = this.battle.p2.active[0];
+    const status = foe.status === 'slp' || foe.status === 'frz' ? 2 : foe.status ? 1.5 : 1;
+    const a = Math.floor((((3 * foe.maxhp - 2 * foe.hp) * catchRate * ballRatio) / (3 * foe.maxhp)) * status);
+    if (a >= 255) return 4;
+    const b = Math.floor(1048560 / Math.floor(Math.sqrt(Math.floor(Math.sqrt(16711680 / Math.max(1, a))))));
+    let shakes = 0;
+    while (shakes < 4 && Math.random() * 65536 < b) shakes++;
+    return shakes;
+  }
+
+  /** PS actuales del rival activo. */
+  foeHP(): number {
+    return this.battle.p2.active[0]?.hp ?? 0;
+  }
+
+  /** Índice (en el equipo del combate) del Pokémon activo del jugador. */
+  activeIndex(): number {
+    return this.battle.p1.pokemon.findIndex((p) => p.isActive);
   }
 
   chooseSwitch(index: number): void {
@@ -151,4 +204,11 @@ function applyState(mons: Battle['p1']['pokemon'], state: Combatant[]): void {
 /** Número de Pokédex de una especie de Showdown (para elegir el sprite). */
 export function speciesNum(species: string): number {
   return Dex.species.get(species).num;
+}
+
+/** PS máximos de un Pokémon a su nivel (IV 31, sin EV), como los calcula Showdown. */
+export function maxHP(spec: PokemonSpec): number {
+  const species = Dex.species.get(toSet(spec).species);
+  if (species.baseStats.hp === 1) return 1;
+  return Math.floor(((2 * species.baseStats.hp + 31) * spec.nivel) / 100) + spec.nivel + 10;
 }

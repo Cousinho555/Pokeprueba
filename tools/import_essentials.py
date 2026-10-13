@@ -286,6 +286,7 @@ def read_species(pbs: Path) -> dict:
         if "InternalName" not in sec:
             continue
         moves = sec.get("Moves", "").split(",")
+        evos = [e for e in sec.get("Evolutions", "").split(",") if e != ""]
         out[sec["InternalName"]] = {
             "num": int(sec["_id"]),
             "nombre": sec.get("Name", sec["InternalName"]),
@@ -293,6 +294,11 @@ def read_species(pbs: Path) -> dict:
             "habilidades": [a for a in sec.get("Abilities", "").split(",") if a],
             "movimientos": [[int(moves[i]), moves[i + 1]] for i in range(0, len(moves) - 1, 2)],
             "especie": sec.get("Kind", ""),
+            "exp": int(sec.get("BaseEXP", 0)),
+            "crecimiento": sec.get("GrowthRate", "Medium"),
+            "captura": int(sec.get("Rareness", 45)),
+            # [especie, método, parámetro], p. ej. ["IVYSAUR", "Level", "16"]
+            "evoluciones": [evos[i:i + 3] for i in range(0, len(evos) - 2, 3)],
             # Ajustes de posición del sprite en combate (en píxeles del sprite original).
             "posJugadorY": int(sec.get("BattlerPlayerY", 0)),
             "posEnemigoY": int(sec.get("BattlerEnemyY", 0)),

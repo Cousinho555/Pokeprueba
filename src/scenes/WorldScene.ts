@@ -1,9 +1,10 @@
 import Phaser from 'phaser';
 import { ESS, encounterChance, mundo, rollEncounter, type InfoMapa } from '../data/essentials';
-import { healParty, partyCanFight } from '../data/party';
+import { bag, BALLS, healParty, party, partyCanFight, pc } from '../data/party';
+import { saveGame } from '../data/save';
 import { textStyle } from '../ui';
 import type { DialogData } from './DialogScene';
-import type { BattleData } from './BattleScene';
+import type { BattleData, BattleResult } from './BattleScene';
 
 type Dir = 2 | 4 | 6 | 8; // como RPG Maker: abajo, izquierda, derecha, arriba
 const DELTA: Record<Dir, [number, number]> = { 2: [0, 1], 4: [-1, 0], 6: [1, 0], 8: [0, -1] };
@@ -122,9 +123,12 @@ export class WorldScene extends Phaser.Scene {
     kb.on('keydown-Z', () => this.interact());
     kb.on('keydown-ENTER', () => this.interact());
     kb.on('keydown-SPACE', () => this.interact());
+    kb.on('keydown-X', () => this.showParty());
+    kb.on('keydown-ESC', () => this.showParty());
     this.events.off(Phaser.Scenes.Events.RESUME).on(Phaser.Scenes.Events.RESUME, () => kb.resetKeys());
 
     if (this.info.exterior) this.showMapName();
+    saveGame({ mapId: this.mapId, x: this.tileX, y: this.tileY, dir: this.facing });
     const lines = [...(data.say ?? [])];
     if (this.info.nombre.includes('Centro Pokémon') || this.mapId === mundo.inicio.mapa) {
       healParty();
@@ -338,6 +342,17 @@ export class WorldScene extends Phaser.Scene {
     else if (ev.warp && ev.trigger === 0) this.warp(ev.warp);
   }
 
+  /** Resumen del equipo y la mochila (X o Esc), a falta de un menú de pausa completo. */
+  private showParty(): void {
+    if (this.busy || this.moving) return;
+    const rows = party.map(({ spec, hp }) => `${spec.nombre}  Nv.${spec.nivel}  ${hp === 0 ? '(debilitado)' : hp == null ? 'PS al máximo' : `PS ${hp}`}`);
+    const pages: string[] = [];
+    for (let i = 0; i < rows.length; i += 2) pages.push(rows.slice(i, i + 2).join('\n'));
+    const balls = Object.keys(BALLS).filter((b) => bag[b]).map((b) => `${BALLS[b].nombre} x${bag[b]}`);
+    pages.push(`Mochila: ${balls.join(', ') || 'vacía'}.` + (pc.length ? `\nPC: ${pc.length} Pokémon.` : ''));
+    this.say(pages);
+  }
+
   private say(lines: string[], onClose?: () => void): void {
     this.busy = true;
     const data: DialogData = {
@@ -371,9 +386,10 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
-  private afterBattle(result: 'win' | 'lose' | 'run'): void {
+  private afterBattle(result: BattleResult): void {
     this.scene.resume();
     this.busy = false;
+    saveGame();
     if (result === 'lose') {
       const { mapa, x, y, dir } = mundo.inicio;
       this.busy = true;

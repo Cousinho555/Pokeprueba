@@ -11,7 +11,7 @@ npm run dev
 
 Abre la URL que muestra Vite (normalmente http://localhost:5173).
 
-Controles: flechas o WASD para moverte, **Z / Enter / Espacio** para interactuar y avanzar texto. En combate también se puede usar el ratón.
+Controles: flechas o WASD para moverte, **Z / Enter / Espacio** para interactuar y avanzar texto, **X / Esc** para ver tu equipo y la mochila. En combate también se puede usar el ratón. La partida se guarda sola en el navegador.
 
 Lo que ya funciona:
 
@@ -75,7 +75,7 @@ Pokémon Essentials BES se distribuye bajo **CC BY-NC-SA 4.0**: este proyecto de
 
 1. **Base jugable** (hecho): mapa, movimiento, encuentros y combate.
 2. **Recursos de Pokémon Essentials BES** (hecho): mapas, tilesets, personajes, sprites y datos en español.
-3. **Progresión**: experiencia y subida de nivel, aprender movimientos, captura con Poké Balls, mochila, centro Pokémon, entrenadores con IA.
+3. **Progresión** (en parte): hecho experiencia, subida de nivel, aprender movimientos, evolución por nivel, captura con Poké Balls, mochila y guardado local. Falta centro Pokémon y entrenadores.
 4. **Mundo**: varios mapas conectados, NPCs con diálogos, eventos (equivalente a los eventos de RPG Maker).
 5. **Supabase**: inicio de sesión, guardado en la nube, Pokédex.
 6. **Online**: combates entre jugadores (Supabase Realtime + validación con el simulador) e intercambios.

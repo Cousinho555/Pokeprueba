@@ -1,16 +1,24 @@
 import Phaser from 'phaser';
 import type { BattleEngine } from '../battle/engine';
+type EngineModule = typeof import('../battle/engine');
 import type { BattleEvent, SideID } from '../battle/protocol';
-import { ESS, especies, type Especie, type PokemonSpec } from '../data/essentials';
-import { party } from '../data/party';
+import {
+  ESS, especies, evolve, expForLevel, expYield, levelEvolution, moveName, movesLearnedAt,
+  type Especie, type PokemonSpec,
+} from '../data/essentials';
+import { addCaught, bag, BALLS, party, type PartyMember } from '../data/party';
 import { textStyle } from '../ui';
 
 export interface BattleData {
   foe: PokemonSpec;
   /** Nombre del fondo de Essentials (Field, IndoorB...). */
   background: string;
-  onEnd: (result: 'win' | 'lose' | 'run') => void;
+  onEnd: (result: BattleResult) => void;
 }
+
+export type BattleResult = 'win' | 'lose' | 'run' | 'catch';
+
+type Action = 'run' | { kind: 'move' | 'switch'; index: number } | { kind: 'ball'; ball: string };
 
 interface MenuItem {
   label: string;
@@ -22,6 +30,7 @@ interface SideView {
   info: Phaser.GameObjects.Container;
   hpBar: Phaser.GameObjects.Rectangle;
   hpText?: Phaser.GameObjects.Text;
+  expBar?: Phaser.GameObjects.Rectangle;
   hp: number;
   maxhp: number;
 }
@@ -44,6 +53,9 @@ export class BattleScene extends Phaser.Scene {
   private data_!: BattleData;
   private engine!: BattleEngine;
   private speciesNum!: (s: string) => number;
+  private mod!: EngineModule;
+  /** Índices (en el equipo del combate) de los Pokémon del jugador que han salido. */
+  private participants = new Set<number>();
   private message!: Phaser.GameObjects.Text;
   private menuLayer!: Phaser.GameObjects.Container;
   private views = {} as Record<SideID, SideView>;
@@ -59,6 +71,7 @@ export class BattleScene extends Phaser.Scene {
     this.data_ = data;
     this.views = {} as Record<SideID, SideView>;
     this.advance = null;
+    this.participants = new Set();
   }
 
   async create(): Promise<void> {
@@ -73,6 +86,7 @@ export class BattleScene extends Phaser.Scene {
     this.input.on('pointerdown', next);
 
     const mod = await import('../battle/engine');
+    this.mod = mod;
     this.speciesNum = mod.speciesNum;
 
     // Solo combaten los Pokémon del equipo que no estén debilitados.
@@ -192,8 +206,16 @@ export class BattleScene extends Phaser.Scene {
           const hpBar = this.add.rectangle(46, 46, 172, 6, 0x48d048).setOrigin(0, 0.5);
           const hpText = ev.side === 'p1' ? this.add.text(220, 52, '', textStyle(22)).setOrigin(1, 0) : undefined;
           info.add(hpText ? [hpBar, hpText] : [hpBar]);
+          let expBar: Phaser.GameObjects.Rectangle | undefined;
+          if (ev.side === 'p1') {
+            this.participants.add(this.engine.activeIndex());
+            info.add(this.add.rectangle(44, 78, 176, 6, 0x505050).setOrigin(0, 0.5));
+            expBar = this.add.rectangle(46, 78, 0, 4, 0x40a8f8).setOrigin(0, 0.5);
+            info.add(expBar);
+          }
           const sprite = this.makeSprite(ev.side, ev.species);
-          this.views[ev.side] = { sprite, info, hpBar, hpText, hp: ev.hp, maxhp: ev.maxhp };
+          this.views[ev.side] = { sprite, info, hpBar, hpText, expBar, hp: ev.hp, maxhp: ev.maxhp };
+          this.refreshExpBar(false);
           sprite.setScale(0);
           this.tweens.add({ targets: sprite, scale: SPRITE_SCALE, duration: 250 });
           await this.setHP(ev.side, ev.hp, ev.maxhp, false);
@@ -242,7 +264,12 @@ export class BattleScene extends Phaser.Scene {
         const action = await this.pickAction();
         if (action === 'run') {
           await this.say('¡Escapaste sin problemas!');
+          this.saveHP();
           return this.finish('run');
+        }
+        if (action.kind === 'ball') {
+          if (await this.throwBall(action.ball)) return this.finish('catch');
+          continue;
         }
         if (action.kind === 'move') this.engine.chooseMove(action.index);
         else this.engine.chooseSwitch(action.index);
@@ -250,13 +277,18 @@ export class BattleScene extends Phaser.Scene {
       await this.playEvents(this.engine.drainEvents());
     }
     const won = this.engine.battle.winner === 'Jugador';
-    await this.say(won ? '¡Has ganado el combate!' : 'Has perdido el combate...');
+    this.saveHP();
+    if (won) await this.awardExp();
+    else await this.say('Has perdido el combate...');
     this.finish(won ? 'win' : 'lose');
   }
 
-  private finish(result: 'win' | 'lose' | 'run'): void {
-    // Guardamos los PS del equipo para el siguiente combate.
+  /** Guarda los PS del equipo para el siguiente combate. */
+  private saveHP(): void {
     this.engine.playerHP().forEach((hp, i) => (party[this.partyIndexes[i]].hp = hp));
+  }
+
+  private finish(result: BattleResult): void {
     this.cameras.main.fadeOut(250);
     this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
       this.scene.stop();
@@ -264,7 +296,139 @@ export class BattleScene extends Phaser.Scene {
     });
   }
 
-  private async pickAction(): Promise<'run' | { kind: 'move' | 'switch'; index: number }> {
+  // ---------------------------------------------------------------- captura
+
+  /** Lanza una Poké Ball. Devuelve true si el Pokémon queda atrapado. */
+  private async throwBall(ball: string): Promise<boolean> {
+    const info = BALLS[ball];
+    bag[ball] = (bag[ball] ?? 1) - 1;
+    const foe = this.data_.foe;
+    const sprite = this.views.p2?.sprite;
+    await this.say(`¡Has lanzado una ${info.nombre}!`);
+    if (sprite) await new Promise((r) => this.tweens.add({ targets: sprite, scale: 0, duration: 250, onComplete: r }));
+    const shakes = this.engine.tryCatch(especies[foe.interno]?.captura ?? 45, info.ratio);
+    for (let i = 0; i < Math.min(shakes, 3); i++) await this.say('...'.repeat(i + 1));
+
+    if (shakes >= 4) {
+      await this.say(`¡Ya está! ¡Has atrapado a ${foe.nombre}!`);
+      this.saveHP();
+      const where = addCaught({ spec: { ...foe, movimientos: [...foe.movimientos] }, hp: this.engine.foeHP() });
+      if (where === 'pc') await this.say(`Tu equipo está lleno. ${foe.nombre} se ha enviado al PC.`);
+      return true;
+    }
+    if (sprite) await new Promise((r) => this.tweens.add({ targets: sprite, scale: SPRITE_SCALE, duration: 200, onComplete: r }));
+    const fail = [
+      '¡Oh, no! ¡El Pokémon se ha escapado!',
+      '¡Vaya! ¡Parecía que lo había atrapado!',
+      '¡Qué rabia! ¡Casi lo consigo!',
+      '¡Por poco! ¡Casi lo había atrapado!',
+    ];
+    await this.say(fail[shakes]);
+    this.engine.chooseBallTurn();
+    await this.playEvents(this.engine.drainEvents());
+    return false;
+  }
+
+  // ---------------------------------------------------------------- experiencia
+
+  /** Reparte la experiencia entre los Pokémon que han participado y siguen en pie. */
+  private async awardExp(): Promise<void> {
+    const hp = this.engine.playerHP();
+    const alive = [...this.participants].filter((i) => hp[i] > 0);
+    if (!alive.length) return;
+    const each = Math.max(1, Math.floor(expYield(this.data_.foe, true) / alive.length));
+    for (const i of alive) await this.gainExp(party[this.partyIndexes[i]], each);
+  }
+
+  private async gainExp(member: PartyMember, amount: number): Promise<void> {
+    const spec = member.spec;
+    await this.say(`¡${spec.nombre} ganó ${amount} puntos de experiencia!`);
+    spec.exp += amount;
+    let leveled = false;
+    while (spec.nivel < 100 && spec.exp >= expForLevel(especies[spec.interno].crecimiento, spec.nivel + 1)) {
+      const oldMax = this.mod.maxHP(spec);
+      spec.nivel++;
+      if (member.hp != null) member.hp += this.mod.maxHP(spec) - oldMax;
+      leveled = true;
+      this.refreshPlayerBox(member);
+      this.refreshExpBar(true);
+      await this.say(`¡${spec.nombre} subió al nivel ${spec.nivel}!`);
+      for (const mv of movesLearnedAt(spec.interno, spec.nivel)) await this.learnMove(member, mv);
+    }
+    this.refreshExpBar(true);
+
+    const target = leveled ? levelEvolution(spec) : null;
+    if (target) {
+      const oldName = spec.nombre;
+      await this.say(`¿Eh? ¡${oldName} está evolucionando!`);
+      const oldMax = this.mod.maxHP(spec);
+      evolve(spec, target);
+      if (member.hp != null) member.hp += this.mod.maxHP(spec) - oldMax;
+      this.refreshPlayerBox(member);
+      await this.say(`¡Enhorabuena! ¡Tu ${oldName} ha evolucionado en ${spec.nombre}!`);
+      for (const mv of movesLearnedAt(spec.interno, spec.nivel)) await this.learnMove(member, mv);
+    }
+  }
+
+  /** Aprender un movimiento; si ya sabe cuatro, el jugador elige cuál olvidar. */
+  private async learnMove(member: PartyMember, move: string): Promise<void> {
+    const spec = member.spec;
+    if (spec.movimientos.includes(move)) return;
+    const name = moveName(move);
+    if (spec.movimientos.length < 4) {
+      spec.movimientos.push(move);
+      await this.say(`¡${spec.nombre} aprendió ${name}!`);
+      return;
+    }
+    await this.say(`${spec.nombre} quiere aprender ${name}, pero ya conoce cuatro movimientos.`);
+    this.message.setText('');
+    const items: MenuItem[] = spec.movimientos.map((m) => ({ label: moveName(m), enabled: true }));
+    items.push({ label: `No aprender ${name}`, enabled: true });
+    const choice = await this.menu(items, 2, [36, 280], BOX_Y + 10, 26);
+    if (choice === 4) {
+      await this.say(`${spec.nombre} no aprendió ${name}.`);
+      return;
+    }
+    const old = moveName(spec.movimientos[choice]);
+    spec.movimientos[choice] = move;
+    await this.say(`1, 2 y... ¡Puf! ${spec.nombre} olvidó ${old} y aprendió ${name}.`);
+  }
+
+  /** Tras subir de nivel o evolucionar: nombre, nivel, PS y sprite del Pokémon en combate. */
+  private refreshPlayerBox(member: PartyMember): void {
+    const v = this.views.p1;
+    if (!v || party[this.partyIndexes[this.engine.activeIndex()]] !== member) return;
+    const [, name, level] = v.info.list as Phaser.GameObjects.Text[];
+    name.setText(member.spec.nombre);
+    level.setText(`Nv${member.spec.nivel}`);
+    const max = this.mod.maxHP(member.spec);
+    void this.setHP('p1', member.hp ?? max, max, false);
+    const key = `back:${member.spec.num}`;
+    if (this.textures.exists(key)) {
+      v.sprite.setTexture(key);
+    } else {
+      this.load.image(key, `${ESS}battlers/back/${member.spec.num}.png`);
+      this.load.once(`filecomplete-image-${key}`, () => v.sprite.active && v.sprite.setTexture(key));
+      this.load.start();
+    }
+  }
+
+  /** Barra de experiencia del Pokémon activo del jugador. */
+  private refreshExpBar(animate: boolean): void {
+    const bar = this.views.p1?.expBar;
+    if (!bar || !this.engine) return;
+    const member = party[this.partyIndexes[this.engine.activeIndex()]];
+    if (!member) return;
+    const { exp, nivel, interno } = member.spec;
+    const growth = especies[interno].crecimiento;
+    const lo = expForLevel(growth, nivel);
+    const hi = expForLevel(growth, nivel + 1);
+    const width = nivel >= 100 ? 0 : 172 * Phaser.Math.Clamp((exp - lo) / Math.max(1, hi - lo), 0, 1);
+    if (animate) this.tweens.add({ targets: bar, width, duration: 400 });
+    else bar.width = width;
+  }
+
+  private async pickAction(): Promise<Action> {
     for (;;) {
       const active = this.engine.switches.find((s) => s.active);
       // Menú principal, como Essentials: mensaje a la izquierda y opciones a la derecha.
@@ -273,7 +437,7 @@ export class BattleScene extends Phaser.Scene {
       const main = await this.menu(
         [
           { label: 'LUCHAR', enabled: true },
-          { label: 'MOCHILA', enabled: false },
+          { label: 'MOCHILA', enabled: Object.keys(BALLS).some((b) => (bag[b] ?? 0) > 0) },
           { label: 'POKÉMON', enabled: canSwitch },
           { label: 'HUIR', enabled: true },
         ],
@@ -281,6 +445,11 @@ export class BattleScene extends Phaser.Scene {
       );
       this.message.setWordWrapWidth(this.scale.width - 44).setText('');
       if (main === 3) return 'run';
+      if (main === 1) {
+        const ball = await this.pickBall();
+        if (ball) return { kind: 'ball', ball };
+        continue;
+      }
       if (main === 2) {
         const idx = await this.pickSwitch(true);
         if (idx != null) return { kind: 'switch', index: idx };
@@ -300,6 +469,15 @@ export class BattleScene extends Phaser.Scene {
       const moveIdx = choice < 2 ? choice : choice - 1;
       return { kind: 'move', index: moves[moveIdx].index };
     }
+  }
+
+  /** Mochila: de momento solo Poké Balls. Devuelve la elegida o null si se cancela. */
+  private async pickBall(): Promise<string | null> {
+    const balls = Object.keys(BALLS).filter((b) => (bag[b] ?? 0) > 0);
+    const items: MenuItem[] = balls.map((b) => ({ label: `${BALLS[b].nombre} x${bag[b]}`, enabled: true }));
+    items.push({ label: 'Atrás', enabled: true });
+    const choice = await this.menu(items, 2, [36, 280], BOX_Y + 10, 26);
+    return choice < balls.length ? balls[choice] : null;
   }
 
   /** Elegir Pokémon. Devuelve el índice para Showdown o `null` si se cancela. */
