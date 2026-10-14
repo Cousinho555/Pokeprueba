@@ -17,6 +17,10 @@ interface Historia {
   /** Interruptor que se activa al terminar la introducción. */
   interruptor: number;
   mapas: Record<string, InfoMapa>;
+  /** Conexiones que sustituyen a las de Essentials entre los mismos mapas y lados. */
+  conexiones?: Mundo['conexiones'];
+  /** Puertas de otros mapas que llevan a un sitio que se ha movido. */
+  traslados?: Mundo['traslados'];
 }
 
 /** Reproduce un sonido de Essentials si está cargado. */
@@ -62,6 +66,12 @@ export class BootScene extends Phaser.Scene {
     // Mapas propios de la historia (no vienen de Essentials).
     const historia = this.cache.json.get('historia') as Historia | undefined;
     Object.assign(mundo.mapas, historia?.mapas ?? {});
+    if (historia?.conexiones) {
+      const key = (c: Mundo['conexiones'][number]) => [`${c[0]}${c[1]}-${c[3]}${c[4]}`, `${c[3]}${c[4]}-${c[0]}${c[1]}`];
+      const replaced = new Set(historia.conexiones.flatMap(key));
+      mundo.conexiones = [...mundo.conexiones.filter((c) => !replaced.has(key(c)[0])), ...historia.conexiones];
+    }
+    mundo.traslados = { ...mundo.traslados, ...historia?.traslados };
     registerEssentials(mundo, this.cache.json.get('especies') as Record<string, Especie>, this.cache.json.get('movimientos'), this.cache.json.get('objetos'));
     initParty();
     const saved = loadGame();

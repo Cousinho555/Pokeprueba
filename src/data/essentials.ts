@@ -34,6 +34,8 @@ export interface InfoMapa {
   curacion?: [number, number, number];
   /** Ruta del .tmj si el mapa no es de Essentials (mapas propios de la historia). */
   archivo?: string;
+  /** Tilesets propios además de los de Essentials: nombre del tileset en el .tmj -> imagen. */
+  tilesets?: Record<string, string>;
 }
 
 /** Entrenador de un combate de un evento (pbTrainerBattle o customTrainerBattle). */
@@ -76,6 +78,8 @@ export interface Mundo {
   encuentros: Record<string, { densidad: number; tablas: Record<string, HuecoEncuentro[]> }>;
   /** "SE/nombre" -> ruta dentro de sonidos/, para los sonidos que usan los eventos. */
   sonidos: Record<string, string>;
+  /** Destinos de traslado que se han movido al rehacer un mapa: "mapa,x,y" -> [x, y]. */
+  traslados?: Record<string, [number, number]>;
 }
 
 /** Pokémon descrito con datos de Essentials; el motor de combate lo convierte en un set de Showdown. */

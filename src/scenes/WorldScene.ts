@@ -106,6 +106,9 @@ export class WorldScene extends Phaser.Scene implements EventHost {
     need(mapKey(this.mapId), () => this.load.tilemapTiledJSON(mapKey(this.mapId), file));
     need(`ts:${this.info.imagen}`, () => this.load.image(`ts:${this.info.imagen}`, `${ESS}tilesets/${encodeURIComponent(this.info.imagen)}`));
     need(`at:${this.info.autotiles}`, () => this.load.image(`at:${this.info.autotiles}`, `${ESS}autotiles/${this.info.autotiles}.png`));
+    for (const [name, file] of Object.entries(this.info.tilesets ?? {})) {
+      need(`tsx:${name}`, () => this.load.image(`tsx:${name}`, file));
+    }
     for (const g of [mundo.jugador, ...this.info.graficos]) {
       const size = mundo.graficos[g];
       if (size) need(charKey(g), () => this.load.spritesheet(charKey(g), `${ESS}characters/${encodeURIComponent(g)}.png`, { frameWidth: size[0], frameHeight: size[1] }));
@@ -120,7 +123,10 @@ export class WorldScene extends Phaser.Scene implements EventHost {
   private build(data: WorldData): void {
     const map = this.make.tilemap({ key: mapKey(this.mapId) });
     const tilesets = map.tilesets.map((t) =>
-      map.addTilesetImage(t.name, t.name.startsWith('autotiles') ? `at:${this.info.autotiles}` : `ts:${this.info.imagen}`)!,
+      map.addTilesetImage(
+        t.name,
+        this.info.tilesets?.[t.name] ? `tsx:${t.name}` : t.name.startsWith('autotiles') ? `at:${this.info.autotiles}` : `ts:${this.info.imagen}`,
+      )!,
     );
     for (const layer of map.layers) {
       const l = map.createLayer(layer.name, tilesets)!;
@@ -132,7 +138,8 @@ export class WorldScene extends Phaser.Scene implements EventHost {
     if (props.oscuro) this.halos = new Map();
 
     this.mapAnims = new MapAnimations(this);
-    this.player = new Character(this, this.startPos.x, this.startPos.y, this.startPos.dir);
+    const start = this.freeSpot(this.startPos.x, this.startPos.y);
+    this.player = new Character(this, start.x, start.y, this.startPos.dir);
     this.player.depthBias = 0.5;
     this.player.setGraphic(mundo.jugador);
     for (const obj of map.getObjectLayer('Eventos')?.objects ?? []) this.addEvent(obj);
@@ -382,6 +389,29 @@ export class WorldScene extends Phaser.Scene implements EventHost {
     return (parseInt(this.pasos[x + y * this.info.ancho], 16) & BIT[dir]) === 0;
   }
 
+  /**
+   * Casilla libre más cercana a (x, y) en los mapas propios. Si una partida se guardó
+   * en un mapa que luego se ha rehecho, el jugador podría aparecer dentro de un edificio.
+   */
+  private freeSpot(x: number, y: number): { x: number; y: number } {
+    const free = (cx: number, cy: number) => this.inside(cx, cy) && this.pasos[cx + cy * this.info.ancho] !== 'f';
+    if (!this.info.archivo || !this.inside(x, y) || free(x, y) || !this.pasos) return { x, y };
+    const seen = new Set([`${x},${y}`]);
+    const queue = [{ x, y }];
+    while (queue.length) {
+      const c = queue.shift()!;
+      if (free(c.x, c.y)) return c;
+      for (const [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+        const n = { x: c.x + dx, y: c.y + dy };
+        if (this.inside(n.x, n.y) && !seen.has(`${n.x},${n.y}`)) {
+          seen.add(`${n.x},${n.y}`);
+          queue.push(n);
+        }
+      }
+    }
+    return { x, y };
+  }
+
   private terrainAt(x: number, y: number): number {
     return parseInt(this.terreno[x + y * this.info.ancho] ?? '0', 16);
   }
@@ -442,6 +472,8 @@ export class WorldScene extends Phaser.Scene implements EventHost {
 
   private warp(to: { mapa: number; x: number; y: number; dir: number }, say?: string[], fade = true): void {
     if (!mundo.mapas[to.mapa]) return;
+    const moved = mundo.traslados?.[`${to.mapa},${to.x},${to.y}`];
+    if (moved) to = { ...to, x: moved[0], y: moved[1] };
     this.locks++;
     this.leaving = true;
     const go = () => void this.scene.restart({ mapId: to.mapa, x: to.x, y: to.y, dir: to.dir || this.player.dir, say } satisfies WorldData);

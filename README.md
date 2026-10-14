@@ -55,6 +55,8 @@ public/assets/essentials/  recursos generados por el importador
 public/assets/ui/          pixel art propio del menú y la mochila
 tools/import_essentials.py importa un proyecto de Essentials BES
 tools/draw_ui.py           dibuja el pixel art de public/assets/ui
+tools/draw_puerto.py       dibuja el pixel art propio del pueblo inicial
+tools/build_puerto.py      construye el mapa del pueblo inicial (El Puerto de Santa María)
 ```
 
 El simulador de Showdown se carga solo al entrar en el primer combate, así el mapa arranca rápido.
@@ -87,6 +89,8 @@ Lo que todavía no entiende (música, imágenes, otros scripts) se salta y se av
 ### Mapas propios de la historia
 
 `public/assets/historia/` guarda mapas que no vienen de Essentials, con el mismo formato que los importados (Tiled `.tmj` con los eventos en la capa `Eventos`). `historia.json` los registra y dice dónde empieza una partida nueva: ahora, la introducción a oscuras con Pikachu (mapa 900), que activa el interruptor 100 al terminar y lleva a la casa. Un mapa con la propiedad `oscuro` se ve negro, con un halo de luz bajo cada personaje.
+
+Un mapa propio puede sustituir a uno de Essentials con el mismo número: así el pueblo inicial (mapa 2) es ahora **El Puerto de Santa María**, con la Calle Larga, la bodega y el toro de Osborne, el castillo de San Marcos, la Iglesia Mayor Prioral, la plaza de toros, la Ribera del Marisco con la fuente de las Galeras y el Vapor, el puente sobre el Guadalete hacia Valdelagrana y la playa de la Puntilla. Lo genera `python3 tools/build_puerto.py` (con el pixel art de `tools/draw_puerto.py`): mezcla tiles de Essentials con un tileset propio (`historia/tilesets/puerto.png`) y recoloca los eventos del pueblo original. Como el mapa cambia de tamaño, `historia.json` también puede sustituir conexiones (`conexiones`) y mover los destinos de las puertas de otros mapas (`traslados`: `"mapa,x,y": [x, y]`).
 
 ### Créditos y licencia de los recursos
 
