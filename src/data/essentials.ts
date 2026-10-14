@@ -34,6 +34,23 @@ export interface InfoMapa {
   curacion?: [number, number, number];
 }
 
+/** Entrenador de un mapa (evento "Trainer(alcance)" o con pbTrainerBattle). */
+export interface Entrenador {
+  clase: string;
+  nombre: string;
+  /** Número del sprite de combate (trainers/N.png). */
+  sprite: number;
+  /** Dinero base: se multiplica por el nivel de su último Pokémon. */
+  dinero: number;
+  derrota: string;
+  /** [especie, nivel, movimientos (vacío = los que aprende por nivel)] */
+  equipo: [string, number, string[]][];
+  intro: string[];
+  despues: string[];
+  /** Casillas a las que te ve y viene a por ti (0 = hay que hablarle). */
+  vision: number;
+}
+
 /** [especie, nivel mínimo, nivel máximo, peso] */
 export type HuecoEncuentro = [string, number, number, number];
 
@@ -154,6 +171,22 @@ export function evolve(spec: PokemonSpec, target: string): void {
   spec.num = e.num;
   spec.nombre = e.nombre;
   if (!e.habilidades.includes(spec.habilidad)) spec.habilidad = e.habilidades[0] ?? spec.habilidad;
+}
+
+/** Equipo de un entrenador listo para combatir. */
+export function trainerTeam(t: Entrenador): PokemonSpec[] {
+  return t.equipo
+    .filter(([sp]) => especies[sp])
+    .map(([sp, nivel, moves]) => {
+      const spec = makePokemon(sp, nivel);
+      if (moves.length) spec.movimientos = moves.slice(0, 4);
+      return spec;
+    });
+}
+
+/** Dinero que se gana al vencer a un entrenador (como Essentials: base × nivel del último Pokémon). */
+export function trainerPrize(t: Entrenador): number {
+  return t.dinero * (t.equipo.at(-1)?.[1] ?? 1);
 }
 
 /** Tirada de encuentro salvaje para un mapa, o null si el mapa no tiene encuentros de tierra. */

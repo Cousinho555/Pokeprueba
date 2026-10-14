@@ -34,6 +34,8 @@ export class ProtocolTranslator {
     private playerName: string,
     private wild: boolean,
     private moveName: (name: string) => string = (n) => n,
+    /** Nombre del entrenador rival ("Campista Liam"), en combates contra entrenadores. */
+    private foeTrainer = 'El rival',
   ) {}
 
   private side(ident: string): SideID {
@@ -79,7 +81,7 @@ export class ProtocolTranslator {
         const name = a.split(': ')[1];
         const msg = side === 'p1'
           ? `¡Adelante, ${name}!`
-          : this.wild ? `¡Un ${name} salvaje apareció!` : `¡El rival saca a ${name}!`;
+          : this.wild ? `¡Un ${name} salvaje apareció!` : `¡${this.foeTrainer} saca a ${name}!`;
         return [{ kind: 'switch', side, name, species, level, hp, maxhp }, text(msg)];
       }
       case 'move':

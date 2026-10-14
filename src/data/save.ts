@@ -1,4 +1,6 @@
-import { bag, party, pc, type PartyMember } from './party';
+import { bag, party, pc, progress, type PartyMember, type Position } from './party';
+
+export type { Position };
 
 /**
  * Partida guardada en el navegador (localStorage). Es provisional: cuando esté
@@ -6,18 +8,14 @@ import { bag, party, pc, type PartyMember } from './party';
  */
 const KEY = 'pokeprueba-partida-v1';
 
-export interface Position {
-  mapId: number;
-  x: number;
-  y: number;
-  dir: number;
-}
-
 interface SaveData {
   party: PartyMember[];
   pc: PartyMember[];
   bag: Record<string, number>;
   pos: Position;
+  dinero?: number;
+  vencidos?: string[];
+  regreso?: Position | null;
 }
 
 let lastPos: Position | null = null;
@@ -25,7 +23,7 @@ let lastPos: Position | null = null;
 export function saveGame(pos?: Position): void {
   if (pos) lastPos = pos;
   if (!lastPos) return;
-  const data: SaveData = { party, pc, bag, pos: lastPos };
+  const data: SaveData = { party, pc, bag, pos: lastPos, ...progress };
   try {
     localStorage.setItem(KEY, JSON.stringify(data));
   } catch {
@@ -44,6 +42,9 @@ export function loadGame(): Position | null {
     pc.splice(0, pc.length, ...(data.pc ?? []));
     for (const k of Object.keys(bag)) delete bag[k];
     Object.assign(bag, data.bag ?? {});
+    progress.dinero = data.dinero ?? progress.dinero;
+    progress.vencidos = data.vencidos ?? [];
+    progress.regreso = data.regreso ?? null;
     lastPos = data.pos;
     return data.pos;
   } catch {

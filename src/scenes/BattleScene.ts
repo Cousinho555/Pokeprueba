@@ -3,14 +3,16 @@ import type { BattleEngine } from '../battle/engine';
 type EngineModule = typeof import('../battle/engine');
 import type { BattleEvent, SideID } from '../battle/protocol';
 import {
-  ESS, especies, evolve, expForLevel, expYield, levelEvolution, moveName, movesLearnedAt,
-  type Especie, type PokemonSpec,
+  ESS, especies, evolve, expForLevel, expYield, levelEvolution, moveName, movesLearnedAt, trainerPrize,
+  type Entrenador, type Especie, type PokemonSpec,
 } from '../data/essentials';
-import { addCaught, bag, BALLS, party, type PartyMember } from '../data/party';
+import { addCaught, bag, BALLS, party, progress, type PartyMember } from '../data/party';
 import { textStyle } from '../ui';
 
 export interface BattleData {
-  foe: PokemonSpec;
+  /** Pokémon rivales: uno si es salvaje, el equipo entero si es un entrenador. */
+  foes: PokemonSpec[];
+  trainer?: Entrenador;
   /** Nombre del fondo de Essentials (Field, IndoorB...). */
   background: string;
   onEnd: (result: BattleResult) => void;
@@ -62,6 +64,12 @@ export class BattleScene extends Phaser.Scene {
   /** Índices dentro de `party` de los Pokémon que han entrado al combate. */
   private partyIndexes: number[] = [];
   private advance: (() => void) | null = null;
+  /** Posición en `foes` del Pokémon rival que está en el campo. */
+  private foeSlot = -1;
+  /** Miembros del equipo que han subido de nivel (pueden evolucionar al acabar). */
+  private leveled = new Set<PartyMember>();
+  /** Rival recién debilitado cuya experiencia falta por repartir. */
+  private expDue: PokemonSpec | null = null;
 
   constructor() {
     super('Battle');
@@ -72,6 +80,14 @@ export class BattleScene extends Phaser.Scene {
     this.views = {} as Record<SideID, SideView>;
     this.advance = null;
     this.participants = new Set();
+    this.foeSlot = -1;
+    this.leveled = new Set();
+    this.expDue = null;
+  }
+
+  private get trainerName(): string {
+    const t = this.data_.trainer;
+    return t ? `${t.clase} ${t.nombre}` : '';
   }
 
   async create(): Promise<void> {
@@ -93,9 +109,14 @@ export class BattleScene extends Phaser.Scene {
     this.partyIndexes = party.map((m, i) => (m.hp === 0 ? -1 : i)).filter((i) => i >= 0);
     this.engine = new mod.BattleEngine(
       this.partyIndexes.map((i) => party[i]),
-      [{ spec: this.data_.foe }],
-      { wild: true, playerName: 'Jugador' },
+      this.data_.foes.map((spec) => ({ spec })),
+      { wild: !this.data_.trainer, playerName: 'Jugador', foeName: this.trainerName },
     );
+    if (this.data_.trainer) {
+      await this.showTrainer(true);
+      await this.say(`¡${this.trainerName} quiere luchar!`);
+      await this.showTrainer(false);
+    }
     await this.playEvents(this.engine.drainEvents());
     this.loop();
   }
@@ -105,7 +126,9 @@ export class BattleScene extends Phaser.Scene {
     const want = (key: string, url: string) => {
       if (!this.textures.exists(key)) this.load.image(key, url);
     };
-    want(`front:${this.data_.foe.num}`, `${ESS}battlers/front/${this.data_.foe.num}.png`);
+    for (const f of this.data_.foes) want(`front:${f.num}`, `${ESS}battlers/front/${f.num}.png`);
+    const t = this.data_.trainer;
+    if (t) want(`trainer:${t.sprite}`, `${ESS}trainers/${t.sprite}.png`);
     for (const m of party) want(`back:${m.spec.num}`, `${ESS}battlers/back/${m.spec.num}.png`);
     want(`bg:${bg}`, `${ESS}battlebacks/battlebg${bg}.png`);
     want(`foebase:${bg}`, `${ESS}battlebacks/enemybase${bg}.png`);
@@ -197,6 +220,7 @@ export class BattleScene extends Phaser.Scene {
       switch (ev.kind) {
         case 'text':
           await this.say(ev.text);
+          if (this.expDue) await this.awardExp();
           break;
         case 'switch': {
           const prev = this.views[ev.side];
@@ -207,6 +231,11 @@ export class BattleScene extends Phaser.Scene {
           const hpText = ev.side === 'p1' ? this.add.text(220, 52, '', textStyle(22)).setOrigin(1, 0) : undefined;
           info.add(hpText ? [hpBar, hpText] : [hpBar]);
           let expBar: Phaser.GameObjects.Rectangle | undefined;
+          if (ev.side === 'p2') {
+            // El rival saca su siguiente Pokémon: la experiencia es para quien se enfrente a él.
+            this.foeSlot++;
+            this.participants = new Set([this.engine.activeIndex()]);
+          }
           if (ev.side === 'p1') {
             this.participants.add(this.engine.activeIndex());
             info.add(this.add.rectangle(44, 78, 176, 6, 0x505050).setOrigin(0, 0.5));
@@ -225,6 +254,8 @@ export class BattleScene extends Phaser.Scene {
           await this.setHP(ev.side, ev.hp, ev.maxhp, true);
           break;
         case 'faint': {
+          // La experiencia se reparte tras el mensaje de "se debilitó".
+          if (ev.side === 'p2') this.expDue = this.data_.foes[this.foeSlot] ?? null;
           const s = this.views[ev.side]?.sprite;
           if (s) await new Promise((r) => this.tweens.add({ targets: s, y: s.y + 40, alpha: 0, duration: 350, onComplete: r }));
           break;
@@ -262,13 +293,24 @@ export class BattleScene extends Phaser.Scene {
         this.engine.chooseSwitch(idx!);
       } else {
         const action = await this.pickAction();
+        if (action === 'run' && this.data_.trainer) {
+          await this.say('¡No puedes huir de un combate contra un entrenador!');
+          continue;
+        }
         if (action === 'run') {
           await this.say('¡Escapaste sin problemas!');
           this.saveHP();
           return this.finish('run');
         }
+        if (action.kind === 'ball' && this.data_.trainer) {
+          await this.say('¡El entrenador ha bloqueado la Poké Ball! ¡No seas ladrón!');
+          continue;
+        }
         if (action.kind === 'ball') {
-          if (await this.throwBall(action.ball)) return this.finish('catch');
+          if (await this.throwBall(action.ball)) {
+            await this.evolvePending();
+            return this.finish('catch');
+          }
           continue;
         }
         if (action.kind === 'move') this.engine.chooseMove(action.index);
@@ -277,15 +319,54 @@ export class BattleScene extends Phaser.Scene {
       await this.playEvents(this.engine.drainEvents());
     }
     const won = this.engine.battle.winner === 'Jugador';
+    if (this.expDue) await this.awardExp();
     this.saveHP();
-    if (won) await this.awardExp();
+    const t = this.data_.trainer;
+    if (won && t) {
+      const prize = trainerPrize(t);
+      progress.dinero += prize;
+      await this.showTrainer(true);
+      await this.say(`¡Has derrotado a ${this.trainerName}!`);
+      if (t.derrota) await this.say(t.derrota);
+      await this.say(`Has ganado ${prize} ₽ por vencer.`);
+    }
+    if (won) await this.evolvePending();
     else await this.say('Has perdido el combate...');
     this.finish(won ? 'win' : 'lose');
   }
 
-  /** Guarda los PS del equipo para el siguiente combate. */
+  /** Guarda los PS del equipo para el siguiente combate (sumando lo ganado al subir de nivel). */
   private saveHP(): void {
-    this.engine.playerHP().forEach((hp, i) => (party[this.partyIndexes[i]].hp = hp));
+    const max = this.engine.playerMaxHP();
+    this.engine.playerHP().forEach((hp, i) => {
+      const member = party[this.partyIndexes[i]];
+      const gained = Math.max(0, this.mod.maxHP(member.spec) - max[i]);
+      member.hp = hp > 0 ? hp + gained : 0;
+    });
+  }
+
+  /** PS que se muestran ahora de un miembro del equipo que está combatiendo. */
+  private liveHP(member: PartyMember): [number, number] {
+    const max = this.mod.maxHP(member.spec);
+    const i = this.partyIndexes.indexOf(party.indexOf(member));
+    if (this.engine.ended || i < 0) return [member.hp ?? max, max];
+    const hp = this.engine.playerHP()[i];
+    return [hp > 0 ? hp + Math.max(0, max - this.engine.playerMaxHP()[i]) : 0, max];
+  }
+
+  /** Sprite del entrenador rival entrando (o saliendo) por la derecha. */
+  private showTrainer(show: boolean): Promise<void> {
+    const t = this.data_.trainer;
+    const key = `trainer:${t?.sprite}`;
+    if (!t || !this.textures.exists(key)) return Promise.resolve();
+    let img = this.children.getByName('trainer') as Phaser.GameObjects.Image | null;
+    if (!img) img = this.add.image(FOE_X, FOE_FEET_Y - 6, key).setOrigin(0.5, 1).setName('trainer').setDepth(15);
+    img.setVisible(true);
+    const [from, to] = show ? [this.scale.width + 120, FOE_X] : [FOE_X, this.scale.width + 120];
+    img.x = from;
+    return new Promise((resolve) =>
+      this.tweens.add({ targets: img, x: to, duration: 400, onComplete: () => { if (!show) img!.setVisible(false); resolve(); } }),
+    );
   }
 
   private finish(result: BattleResult): void {
@@ -302,7 +383,7 @@ export class BattleScene extends Phaser.Scene {
   private async throwBall(ball: string): Promise<boolean> {
     const info = BALLS[ball];
     bag[ball] = (bag[ball] ?? 1) - 1;
-    const foe = this.data_.foe;
+    const foe = this.data_.foes[0];
     const sprite = this.views.p2?.sprite;
     await this.say(`¡Has lanzado una ${info.nombre}!`);
     if (sprite) await new Promise((r) => this.tweens.add({ targets: sprite, scale: 0, duration: 250, onComplete: r }));
@@ -333,10 +414,13 @@ export class BattleScene extends Phaser.Scene {
 
   /** Reparte la experiencia entre los Pokémon que han participado y siguen en pie. */
   private async awardExp(): Promise<void> {
+    const foe = this.expDue;
+    this.expDue = null;
+    if (!foe) return;
     const hp = this.engine.playerHP();
     const alive = [...this.participants].filter((i) => hp[i] > 0);
     if (!alive.length) return;
-    const each = Math.max(1, Math.floor(expYield(this.data_.foe, true) / alive.length));
+    const each = Math.max(1, Math.floor(expYield(foe, !this.data_.trainer) / alive.length));
     for (const i of alive) await this.gainExp(party[this.partyIndexes[i]], each);
   }
 
@@ -344,21 +428,23 @@ export class BattleScene extends Phaser.Scene {
     const spec = member.spec;
     await this.say(`¡${spec.nombre} ganó ${amount} puntos de experiencia!`);
     spec.exp += amount;
-    let leveled = false;
     while (spec.nivel < 100 && spec.exp >= expForLevel(especies[spec.interno].crecimiento, spec.nivel + 1)) {
-      const oldMax = this.mod.maxHP(spec);
       spec.nivel++;
-      if (member.hp != null) member.hp += this.mod.maxHP(spec) - oldMax;
-      leveled = true;
+      this.leveled.add(member);
       this.refreshPlayerBox(member);
       this.refreshExpBar(true);
       await this.say(`¡${spec.nombre} subió al nivel ${spec.nivel}!`);
       for (const mv of movesLearnedAt(spec.interno, spec.nivel)) await this.learnMove(member, mv);
     }
     this.refreshExpBar(true);
+  }
 
-    const target = leveled ? levelEvolution(spec) : null;
-    if (target) {
+  /** Al terminar el combate evolucionan los que han subido de nivel y ya les toca. */
+  private async evolvePending(): Promise<void> {
+    for (const member of this.leveled) {
+      const spec = member.spec;
+      const target = levelEvolution(spec);
+      if (!target || member.hp === 0) continue;
       const oldName = spec.nombre;
       await this.say(`¿Eh? ¡${oldName} está evolucionando!`);
       const oldMax = this.mod.maxHP(spec);
@@ -401,8 +487,8 @@ export class BattleScene extends Phaser.Scene {
     const [, name, level] = v.info.list as Phaser.GameObjects.Text[];
     name.setText(member.spec.nombre);
     level.setText(`Nv${member.spec.nivel}`);
-    const max = this.mod.maxHP(member.spec);
-    void this.setHP('p1', member.hp ?? max, max, false);
+    const [hp, max] = this.liveHP(member);
+    void this.setHP('p1', hp, max, false);
     const key = `back:${member.spec.num}`;
     if (this.textures.exists(key)) {
       v.sprite.setTexture(key);

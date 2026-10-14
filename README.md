@@ -75,7 +75,7 @@ Pokémon Essentials BES se distribuye bajo **CC BY-NC-SA 4.0**: este proyecto de
 
 1. **Base jugable** (hecho): mapa, movimiento, encuentros y combate.
 2. **Recursos de Pokémon Essentials BES** (hecho): mapas, tilesets, personajes, sprites y datos en español.
-3. **Progresión** (en parte): hecho experiencia, subida de nivel, aprender movimientos, evolución por nivel, captura con Poké Balls, mochila y guardado local. Falta centro Pokémon y entrenadores.
+3. **Progresión** (hecho): experiencia, subida de nivel, aprender movimientos, evolución por nivel, captura con Poké Balls, mochila, guardado local, Centro Pokémon (la enfermera cura y es donde vuelves al perder) y entrenadores de los mapas de Essentials (te ven, vienen a por ti y dan dinero). Pendiente: tiendas y objetos curativos.
 4. **Mundo**: varios mapas conectados, NPCs con diálogos, eventos (equivalente a los eventos de RPG Maker).
 5. **Supabase**: inicio de sesión, guardado en la nube, Pokédex.
 6. **Online**: combates entre jugadores (Supabase Realtime + validación con el simulador) e intercambios.

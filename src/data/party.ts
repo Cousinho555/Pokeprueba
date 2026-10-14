@@ -9,6 +9,21 @@ export interface PartyMember {
 
 export const MAX_PARTY = 6;
 
+/** Una casilla del mundo. */
+export interface Position {
+  mapId: number;
+  x: number;
+  y: number;
+  dir: number;
+}
+
+/** Dinero, entrenadores vencidos ("mapa:evento") y dónde despiertas si pierdes. */
+export const progress = {
+  dinero: 3000,
+  vencidos: [] as string[],
+  regreso: null as Position | null,
+};
+
 /** Equipo del jugador, Pokémon guardados en el PC y mochila. */
 export const party: PartyMember[] = [];
 export const pc: PartyMember[] = [];
@@ -27,6 +42,7 @@ export function initParty(): void {
   party.push({ spec: makePokemon('CHARMANDER', 14), hp: null }, { spec: makePokemon('PIKACHU', 12), hp: null });
   for (const k of Object.keys(bag)) delete bag[k];
   Object.assign(bag, { POKEBALL: 10, GREATBALL: 3 });
+  Object.assign(progress, { dinero: 3000, vencidos: [], regreso: null });
 }
 
 export function healParty(): void {

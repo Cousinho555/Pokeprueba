@@ -140,26 +140,100 @@ def clean_text(t: str) -> str:
     return " ".join(t.split())
 
 
-def event_info(ev) -> dict | None:
-    e = attrs(ev)
-    page = attrs(e["@pages"][0])
-    g = attrs(page["@graphic"])
-    cmds = [(attrs(c)["@code"], attrs(c)["@parameters"]) for c in page["@list"]]
-    info: dict = {"id": e["@id"], "nombre": s(e["@name"]), "x": e["@x"], "y": e["@y"],
-                  "grafico": s(g["@character_name"]), "direccion": g["@direction"],
-                  "patron": g["@pattern"], "atraviesa": bool(page["@through"]),
-                  "disparo": page["@trigger"]}
+def page_commands(page) -> list[tuple[int, list]]:
+    return [(attrs(c)["@code"], attrs(c)["@parameters"]) for c in attrs(page)["@list"]]
+
+
+def page_texts(cmds, stop=lambda code, params: False) -> list[str]:
+    """Mensajes (101 + 401) de una página, hasta que `stop` diga basta."""
     texts: list[str] = []
     for code, params in cmds:
-        if code in (102, 111, 402, 403):  # elecciones y condiciones: cortamos ahí
+        if stop(code, params):
             break
         if code == 101:
             texts.append(s(params[0]))
         elif code == 401 and texts:
             texts[-1] += " " + s(params[0])
-        elif code == 201 and params[0] == 0:
+    return [t for t in (clean_text(t) for t in texts) if t]
+
+
+def script_of(code: int, params) -> str | None:
+    """Texto de Ruby de un comando de script (355/655) o de una condición de script (111)."""
+    if code in (355, 655):
+        return s(params[0])
+    if code == 111 and params[0] == 12:
+        return s(params[1])
+    return None
+
+
+TRAINER_BATTLE = re.compile(
+    r'pbTrainerBattle\(PBTrainers::(\w+),\s*"([^"]*)",\s*_I\("((?:[^"\\]|\\.)*)"\)(?:,\s*(?:true|false))?(?:,\s*(\d+))?')
+CUSTOM_MON = re.compile(r"createPokemon\(:(\w+),\s*(\d+)(?:,\s*\[([^\]]*)\])?")
+CUSTOM_TRAINER = re.compile(r'createTrainer\(:(\w+),\s*"([^"]*)"')
+CUSTOM_DEFEAT = re.compile(r'customTrainerBattle\([^,]*,\s*_I\("((?:[^"\\]|\\.)*)"\)')
+
+
+def trainer_info(cmds, after_cmds) -> dict | None:
+    """Entrenador de un evento: equipo, clase, frase de derrota y textos de antes y después."""
+    lines, battle_at = [], None
+    for i, (code, params) in enumerate(cmds):
+        sc = script_of(code, params)
+        if sc is None:
+            continue
+        lines.append(sc)
+        if battle_at is None and ("pbTrainerBattle(" in sc or "customTrainerBattle(" in " ".join(lines)):
+            battle_at = i
+    script = " ".join(lines)
+    team = None
+    if m := TRAINER_BATTLE.search(script):
+        ttype, name, defeat, party_id = m.group(1), m.group(2), m.group(3), int(m.group(4) or 0)
+        team = TRAINERS.get((ttype, name, party_id)) or TRAINERS.get((ttype, name, 0))
+    elif (t := CUSTOM_TRAINER.search(script)) and (d := CUSTOM_DEFEAT.search(script)):
+        ttype, name, defeat = t.group(1), t.group(2), d.group(1)
+        team = [[sp, int(lv), [x.strip().lstrip(":") for x in mv.split(",") if x.strip()] if mv else []]
+                for sp, lv, mv in CUSTOM_MON.findall(script)]
+    if not team or ttype not in TRAINER_TYPES:
+        return None
+    tt = TRAINER_TYPES[ttype]
+    first_script = next(i for i, (c, p) in enumerate(cmds) if script_of(c, p) is not None and
+                        ("pbTrainerBattle(" in script_of(c, p) or "party" in script_of(c, p) or "createPokemon" in script_of(c, p)))
+    intro = page_texts(cmds[:first_script], lambda c, p: c in (102, 402, 403))
+    return {"clase": tt["nombre"], "nombre": name, "sprite": tt["id"], "dinero": tt["dinero"],
+            "derrota": clean_text(defeat.replace("\\", "")), "equipo": team, "intro": intro,
+            "despues": page_texts(after_cmds, lambda c, p: c in (102, 111, 402, 403)) if after_cmds else []}
+
+
+def event_info(ev) -> dict | None:
+    e = attrs(ev)
+    pages = e["@pages"]
+    page = attrs(pages[0])
+    g = attrs(page["@graphic"])
+    cmds = page_commands(pages[0])
+    info: dict = {"id": e["@id"], "nombre": s(e["@name"]), "x": e["@x"], "y": e["@y"],
+                  "grafico": s(g["@character_name"]), "direccion": g["@direction"],
+                  "patron": g["@pattern"], "atraviesa": bool(page["@through"]),
+                  "disparo": page["@trigger"]}
+    for code, params in cmds:
+        if code in (102, 111, 402, 403):  # elecciones y condiciones: cortamos ahí
+            break
+        if code == 201 and params[0] == 0:
             info["warp"] = {"mapa": params[1], "x": params[2], "y": params[3], "dir": params[4]}
-    texts = [t for t in (clean_text(t) for t in texts) if t]
+    texts = page_texts(cmds, lambda c, p: c in (102, 111, 402, 403))
+
+    # Enfermera del Centro Pokémon: cura al equipo (314) y fija el punto de regreso.
+    if any(code == 314 for code, _ in cmds):
+        info["cura"] = True
+        texts = [t for t in texts if not t.endswith("?")]
+    # Entrenadores: los que combaten al verte se llaman "Trainer(alcance)".
+    if info["grafico"]:
+        after = page_commands(pages[1]) if len(pages) > 1 else None
+        tr = trainer_info(cmds, after)
+        if tr:
+            m = re.match(r"Trainer\((\d+)\)", info["nombre"])
+            tr["vision"] = int(m.group(1)) if m and info["disparo"] == 2 else 0
+            info["entrenador"] = tr
+            texts = []
+
     if texts:
         info["texto"] = texts
     if not info["grafico"] and "warp" not in info and not texts:
@@ -260,7 +334,8 @@ def convert_map(map_id: int, name: str, data_dir: Path, tilesets: dict, out_maps
     (out_maps / f"map{map_id:03d}.tmj").write_text(json.dumps(tmj, ensure_ascii=False, separators=(",", ":")))
     return {"id": map_id, "nombre": name, "ancho": w, "alto": h, "tileset": ts_id,
             "autotiles": ts["autotile_key"], "imagen": ts["file"], "bgm": s(attrs(m["@bgm"])["@name"]),
-            "graficos": sorted({e["grafico"] for e in events if e["grafico"]})}
+            "graficos": sorted({e["grafico"] for e in events if e["grafico"]}),
+            "entrenadores": [e["entrenador"]["sprite"] for e in events if "entrenador" in e]}
 
 
 # ------------------------------------------------------------------ PBS
@@ -357,6 +432,38 @@ def read_connections(pbs: Path) -> list:
     return out
 
 
+TRAINERS: dict = {}
+TRAINER_TYPES: dict = {}
+
+
+def read_trainer_types(pbs: Path) -> dict:
+    types = {}
+    for line in (pbs / "trainertypes.txt").read_text(encoding="utf-8-sig").splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        f = line.split(",")
+        types[f[1]] = {"id": int(f[0]), "nombre": f[2], "dinero": int(f[3] or 30)}
+    return types
+
+
+def read_trainers(pbs: Path) -> dict:
+    """trainers.txt: tipo / nombre[,versión] / nº de Pokémon[,objetos] / una línea por Pokémon."""
+    lines = [l.strip() for l in (pbs / "trainers.txt").read_text(encoding="utf-8-sig").splitlines()
+             if l.strip() and not l.startswith("#")]
+    out, i = {}, 0
+    while i + 2 < len(lines):
+        ttype = lines[i]
+        name, _, ver = lines[i + 1].partition(",")
+        count = int(lines[i + 2].split(",")[0])
+        team = []
+        for row in lines[i + 3:i + 3 + count]:
+            f = row.split(",")
+            team.append([f[0], int(f[1]), [m for m in f[3:7] if m]])
+        out[(ttype, name, int(ver or 0))] = team
+        i += 3 + count
+    return out
+
+
 def read_metadata(pbs: Path) -> dict:
     meta = {}
     for sec in read_pbs_sections(pbs / "metadata.txt"):
@@ -371,7 +478,7 @@ def main(src: Path) -> None:
     if OUT.exists():
         shutil.rmtree(OUT)
     for sub in ("maps", "tilesets", "autotiles", "characters", "battlers/front", "battlers/back",
-                "battlebacks", "fonts", "data"):
+                "battlebacks", "trainers", "fonts", "data"):
         (OUT / sub).mkdir(parents=True, exist_ok=True)
 
     # Tilesets
@@ -393,6 +500,10 @@ def main(src: Path) -> None:
             "passages": Table(a["@passages"]), "priorities": Table(a["@priorities"]),
             "terrain": Table(a["@terrain_tags"]),
         }
+
+    # Entrenadores (se usan al convertir los eventos de los mapas)
+    TRAINER_TYPES.update(read_trainer_types(pbs))
+    TRAINERS.update(read_trainers(pbs))
 
     # Mapas
     infos = load(open(data_dir / "MapInfos.rxdata", "rb"))
@@ -430,6 +541,11 @@ def main(src: Path) -> None:
     for f in (gfx / "Battlebacks").iterdir():
         if f.suffix.lower() == ".png":
             shutil.copy(f, OUT / "battlebacks" / f.name)
+    # Sprites de combate de los entrenadores que aparecen en los mapas
+    for sid in sorted({e for m in mapas.values() for e in m.pop("entrenadores")}):
+        img = gfx / "Battlers" / "Trainers" / f"trainer{sid:03d}.png"
+        if img.exists():
+            shutil.copy(img, OUT / "trainers" / f"{sid}.png")
     for f in (src / "Fonts").glob("pkmnem*.ttf"):
         shutil.copy(f, OUT / "fonts" / f.name)
 
