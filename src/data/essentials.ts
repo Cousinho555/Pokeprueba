@@ -34,7 +34,7 @@ export interface InfoMapa {
   curacion?: [number, number, number];
 }
 
-/** Entrenador de un mapa (evento "Trainer(alcance)" o con pbTrainerBattle). */
+/** Entrenador de un combate de un evento (pbTrainerBattle o customTrainerBattle). */
 export interface Entrenador {
   clase: string;
   nombre: string;
@@ -45,10 +45,19 @@ export interface Entrenador {
   derrota: string;
   /** [especie, nivel, movimientos (vacío = los que aprende por nivel)] */
   equipo: [string, number, string[]][];
-  intro: string[];
-  despues: string[];
-  /** Casillas a las que te ve y viene a por ti (0 = hay que hablarle). */
-  vision: number;
+}
+
+/** Objeto de items.txt. */
+export interface Objeto {
+  id: number;
+  nombre: string;
+  plural: string;
+  bolsillo: number;
+  precio: number;
+  descripcion: string;
+  usoMapa: number;
+  usoCombate: number;
+  mt: string;
 }
 
 /** [especie, nivel mínimo, nivel máximo, peso] */
@@ -63,6 +72,8 @@ export interface Mundo {
   /** [mapa1, lado1, desplazamiento1, mapa2, lado2, desplazamiento2] como en connections.txt */
   conexiones: [number, string, number, number, string, number][];
   encuentros: Record<string, { densidad: number; tablas: Record<string, HuecoEncuentro[]> }>;
+  /** "SE/nombre" -> ruta dentro de sonidos/, para los sonidos que usan los eventos. */
+  sonidos: Record<string, string>;
 }
 
 /** Pokémon descrito con datos de Essentials; el motor de combate lo convierte en un set de Showdown. */
@@ -82,11 +93,13 @@ export const ESS = 'assets/essentials/';
 export let mundo: Mundo;
 export let especies: Record<string, Especie>;
 export let movimientos: Record<string, string>;
+export let objetos: Record<string, Objeto>;
 
-export function registerEssentials(m: Mundo, e: Record<string, Especie>, mv: Record<string, string>): void {
+export function registerEssentials(m: Mundo, e: Record<string, Especie>, mv: Record<string, string>, o: Record<string, Objeto>): void {
   mundo = m;
   especies = e;
   movimientos = mv;
+  objetos = o;
 }
 
 /** Nombre en español de un movimiento a partir de su id de Showdown o nombre interno. */

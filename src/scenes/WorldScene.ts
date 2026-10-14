@@ -1,19 +1,15 @@
 import Phaser from 'phaser';
-import { ESS, encounterChance, mundo, rollEncounter, trainerTeam, type Entrenador, type InfoMapa, type PokemonSpec } from '../data/essentials';
-import { bag, BALLS, healParty, party, partyCanFight, pc, progress } from '../data/party';
+import { ESS, encounterChance, mundo, objetos, rollEncounter, trainerTeam, type Entrenador, type InfoMapa, type PokemonSpec } from '../data/essentials';
+import { addItem, bag, BALLS, healParty, party, partyCanFight, pc, progress } from '../data/party';
 import { saveGame } from '../data/save';
 import { sfx } from './BootScene';
 import { textStyle } from '../ui';
 import type { DialogData } from './DialogScene';
 import type { BattleData, BattleResult } from './BattleScene';
+import { Character, charKey, DELTA, isDir, REVERSE, TILE, type Dir } from '../world/character';
+import { FRAME_MS, Interpreter, runRoute, type EventHost, type Pagina } from '../world/interpreter';
 
-type Dir = 2 | 4 | 6 | 8; // como RPG Maker: abajo, izquierda, derecha, arriba
-const DELTA: Record<Dir, [number, number]> = { 2: [0, 1], 4: [-1, 0], 6: [1, 0], 8: [0, -1] };
-const ROW: Record<Dir, number> = { 2: 0, 4: 1, 6: 2, 8: 3 };
 const BIT: Record<Dir, number> = { 2: 1, 4: 2, 6: 4, 8: 8 };
-const REVERSE: Record<Dir, Dir> = { 2: 8, 4: 6, 6: 4, 8: 2 };
-const TILE = 32;
-const STEP_MS = 200;
 
 // Etiquetas de terreno de Essentials v16
 const TERRAIN_LEDGE = 1;
@@ -29,55 +25,68 @@ export interface WorldData {
   say?: string[];
 }
 
+/** Evento de RPG Maker en el mapa: sus páginas y el personaje que lo representa. */
 interface MapEvent {
-  /** Identificador estable para recordar si ya se le ha vencido. */
-  key: string;
+  id: number;
   name: string;
-  dir: Dir;
-  x: number;
-  y: number;
-  sprite?: Phaser.GameObjects.Sprite;
-  blocks: boolean;
-  trigger: number;
-  text?: string[];
-  warp?: { mapa: number; x: number; y: number; dir: number };
-  trainer?: Entrenador;
-  /** Enfermera del Centro Pokémon. */
-  heals?: boolean;
+  /** Casillas a las que ve un entrenador ("Trainer(n)"). */
+  vision: number;
+  pages: Pagina[];
+  /** Página activa (-1 si no se cumple ninguna). */
+  page: number;
+  ch: Character;
+  erased: boolean;
+  running: boolean;
+  /** Página automática que ya se ejecutó sin cambiar nada (no se repite en bucle). */
+  autoDone: number;
+  /** Próximo movimiento autónomo (aleatorio o hacia el jugador). */
+  nextMove: number;
 }
 
 const mapKey = (id: number) => `map${id}`;
-const charKey = (name: string) => `chr:${name}`;
 
 /** Mapas de Essentials: movimiento por casillas, colisiones, eventos, puertas y encuentros. */
-export class WorldScene extends Phaser.Scene {
+export class WorldScene extends Phaser.Scene implements EventHost {
   private info!: InfoMapa;
-  private mapId = 0;
+  mapId = 0;
+  player!: Character;
+  temp: Record<string, boolean> = {};
   private pasos = '';
   private terreno = '';
   private mapEvents: MapEvent[] = [];
-  private player!: Phaser.GameObjects.Sprite;
+  private interpreters = new Set<Interpreter>();
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: Record<'W' | 'A' | 'S' | 'D', Phaser.Input.Keyboard.Key>;
-  private tileX = 0;
-  private tileY = 0;
-  private facing: Dir = 2;
-  private moving = false;
-  private busy = true;
-  private stepFrame = 0;
+  private startPos: { x: number; y: number; dir: Dir } = { x: 0, y: 0, dir: 2 };
+  /** Cosas que impiden moverse: mensajes, eventos en curso, combates, cambios de mapa. */
+  private locks = 0;
+  /** Se está cambiando de mapa: los eventos en curso ya no deben tocar nada. */
+  private leaving = false;
+  private lastUnlock = 0;
+  private toneRect?: Phaser.GameObjects.Rectangle;
 
   constructor() {
     super('World');
   }
 
+  get stage(): Phaser.Scene {
+    return this;
+  }
+
+  private get busy(): boolean {
+    return this.locks > 0;
+  }
+
   init(data: WorldData): void {
     this.mapId = data.mapId;
-    this.tileX = data.x;
-    this.tileY = data.y;
-    this.facing = ([2, 4, 6, 8].includes(data.dir) ? data.dir : this.facing) as Dir;
+    const dir = isDir(data.dir) ? data.dir : (this.player?.dir ?? 2);
+    this.startPos = { x: data.x, y: data.y, dir };
     this.mapEvents = [];
-    this.busy = true;
-    this.moving = false;
+    this.interpreters = new Set();
+    this.temp = {};
+    this.locks = 1;
+    this.leaving = false;
+    this.toneRect = undefined;
   }
 
   create(data: WorldData): void {
@@ -95,6 +104,9 @@ export class WorldScene extends Phaser.Scene {
     }
     this.load.once(Phaser.Loader.Events.COMPLETE, () => this.build(data));
     this.load.start();
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      for (const it of this.interpreters) it.stop();
+    });
   }
 
   private build(data: WorldData): void {
@@ -110,17 +122,18 @@ export class WorldScene extends Phaser.Scene {
     this.pasos = props.pasos ?? '';
     this.terreno = props.terreno ?? '';
 
+    this.player = new Character(this, this.startPos.x, this.startPos.y, this.startPos.dir);
+    this.player.depthBias = 0.5;
+    this.player.setGraphic(mundo.jugador);
     for (const obj of map.getObjectLayer('Eventos')?.objects ?? []) this.addEvent(obj);
-
-    this.player = this.add.sprite(0, 0, charKey(mundo.jugador), ROW[this.facing] * 4).setOrigin(0.5, 1);
-    this.placePlayer();
+    this.refreshPages();
 
     const cam = this.cameras.main;
     const { width, height } = this.scale;
     const w = map.widthInPixels;
     const h = map.heightInPixels;
     cam.setBounds(Math.min(0, (w - width) / 2), Math.min(0, (h - height) / 2), Math.max(w, width), Math.max(h, height));
-    cam.startFollow(this.player, true);
+    cam.startFollow(this.player.sprite!, true);
     cam.roundPixels = true;
     cam.fadeIn(200);
 
@@ -135,80 +148,178 @@ export class WorldScene extends Phaser.Scene {
     this.events.off(Phaser.Scenes.Events.RESUME).on(Phaser.Scenes.Events.RESUME, () => kb.resetKeys());
 
     if (this.info.exterior) this.showMapName();
-    saveGame({ mapId: this.mapId, x: this.tileX, y: this.tileY, dir: this.facing });
-    const lines = [...(data.say ?? [])];
+    saveGame(this.position());
     if (this.mapId === mundo.inicio.mapa) healParty();
-    if (lines.length) this.say(lines, () => this.checkTrainers());
-    else {
-      this.busy = false;
-      this.checkTrainers();
-    }
+    this.locks = 0;
+    const lines = [...(data.say ?? [])];
+    if (lines.length) this.say(lines, () => this.afterEvents());
+    else this.afterEvents();
   }
 
   private addEvent(obj: Phaser.Types.Tilemaps.TiledObject): void {
     const p = Object.fromEntries(((obj.properties ?? []) as { name: string; value: string }[]).map((x) => [x.name, x.value]));
-    const x = Math.floor(obj.x! / TILE);
-    const y = Math.floor(obj.y! / TILE);
-    const dir = Number(p.direccion ?? 2) as Dir;
-    const ev: MapEvent = {
-      key: `${this.mapId}:${x}:${y}:${obj.name}`,
-      name: obj.name,
-      dir: ([2, 4, 6, 8].includes(dir) ? dir : 2) as Dir,
-      x,
-      y,
-      blocks: false,
-      trigger: Number(p.disparo ?? 0),
-      text: p.texto ? JSON.parse(p.texto) : undefined,
-      warp: p.warp ? JSON.parse(p.warp) : undefined,
-      trainer: p.entrenador ? JSON.parse(p.entrenador) : undefined,
-      heals: p.cura === 'true',
-    };
-    const g = p.grafico;
-    if (g && this.textures.exists(charKey(g))) {
-      const frame = (ROW[dir] ?? 0) * 4 + Number(p.patron ?? 0);
-      ev.sprite = this.add
-        .sprite(x * TILE + TILE / 2, (y + 1) * TILE, charKey(g), frame)
-        .setOrigin(0.5, 1)
-        .setDepth(y);
-      ev.blocks = p.atraviesa !== 'true';
-    }
-    this.mapEvents.push(ev);
+    if (!p.paginas) return;
+    const ch = new Character(this, Math.floor(obj.x! / TILE), Math.floor(obj.y! / TILE));
+    this.mapEvents.push({
+      id: Number(p.id), name: obj.name, vision: Number(p.vision ?? 0), pages: JSON.parse(p.paginas),
+      page: -2, ch, erased: false, running: false, autoDone: -1, nextMove: 0,
+    });
   }
 
-  update(): void {
-    if (this.moving || this.busy || !this.player) return;
-    const dir = this.heldDir();
-    if (!dir) {
-      this.player.setFrame(ROW[this.facing] * 4);
-      return;
-    }
-    this.facing = dir;
-    const [dx, dy] = DELTA[dir];
-    const nx = this.tileX + dx;
-    const ny = this.tileY + dy;
+  // ------------------------------------------------------------- páginas de los eventos
 
-    if (!this.inside(nx, ny)) {
-      this.player.setFrame(ROW[dir] * 4);
-      if (this.passable(this.tileX, this.tileY, dir)) this.tryConnection(dir);
-      return;
+  private pageOk(ev: MapEvent, pg: Pagina): boolean {
+    const c = pg.cond;
+    const self = (ch: string) => {
+      const key = `${this.mapId}:${ev.id}:${ch}`;
+      return !!(progress.locales[key] || this.temp[key]);
+    };
+    if (c.s1 && !progress.interruptores[c.s1]) return false;
+    if (c.s2 && !progress.interruptores[c.s2]) return false;
+    if (c.v && (progress.variables[c.v[0]] ?? 0) < c.v[1]) return false;
+    if (c.ss && !self(c.ss)) return false;
+    return true;
+  }
+
+  /** Como RPG Maker: cada evento muestra la última página cuyas condiciones se cumplen. */
+  refreshPages(): void {
+    for (const ev of this.mapEvents) {
+      if (ev.erased) continue;
+      let page = -1;
+      for (let k = ev.pages.length - 1; k >= 0; k--) {
+        if (this.pageOk(ev, ev.pages[k])) {
+          page = k;
+          break;
+        }
+      }
+      if (page === ev.page) continue;
+      ev.page = page;
+      ev.autoDone = -1;
+      const ch = ev.ch;
+      ch.routeId++;
+      const pg = ev.pages[page];
+      if (!pg) {
+        ch.setGraphic('');
+        continue;
+      }
+      Object.assign(ch, { through: pg.atraviesa, fixDir: false, walkAnime: pg.anda, onTop: pg.encima, speed: pg.vel, freq: pg.frec });
+      ch.setGraphic(pg.grafico, pg.dir, pg.patron);
+      ch.fixDir = pg.fijo;
+      ch.sprite?.setAlpha(pg.opacidad / 255);
+      ch.setStepAnime(pg.paso);
+      if (pg.mov === 3 && pg.ruta) void runRoute(this, ch, { ...pg.ruta, repite: true });
+      if (pg.disparo === 4) void this.parallel(ev, page);
     }
-    const ev = this.eventAt(nx, ny);
-    if (ev?.blocks) {
-      this.player.setFrame(ROW[dir] * 4);
-      if (ev.warp && ev.trigger === 1) this.warp(ev.warp);
-      return;
+    // Los eventos automáticos se lanzan en cuanto se puede.
+    if (!this.busy) this.time.delayedCall(0, () => this.checkAutorun());
+  }
+
+  private activePage(ev: MapEvent): Pagina | undefined {
+    return ev.erased ? undefined : ev.pages[ev.page];
+  }
+
+  /** Ejecuta un evento. Los procesos que no son paralelos bloquean al jugador. */
+  private async runEvent(ev: MapEvent): Promise<void> {
+    const pg = this.activePage(ev);
+    if (!pg || ev.running || !pg.lista.length) return;
+    ev.running = true;
+    this.locks++;
+    // Al hablarle, el personaje se gira hacia el jugador (salvo que tenga la dirección fija).
+    if (pg.disparo <= 2 && ev.ch.sprite && !ev.ch.fixDir) ev.ch.turnToward(this.player.x, this.player.y);
+    const page = ev.page;
+    const it = new Interpreter(this, ev.id);
+    this.interpreters.add(it);
+    await it.run(pg.lista);
+    this.interpreters.delete(it);
+    ev.running = false;
+    if (this.leaving) return;
+    saveGame(this.position());
+    if (pg.disparo === 3 && ev.page === page) ev.autoDone = page;
+    this.unlock();
+    this.afterEvents();
+  }
+
+  private async parallel(ev: MapEvent, page: number): Promise<void> {
+    const pg = ev.pages[page];
+    while (ev.page === page && !ev.erased && !this.leaving) {
+      const it = new Interpreter(this, ev.id);
+      this.interpreters.add(it);
+      await it.run(pg.lista);
+      this.interpreters.delete(it);
+      await this.wait(FRAME_MS);
     }
-    if (dir === 2 && this.terrainAt(nx, ny) === TERRAIN_LEDGE) return this.jump();
-    if (!this.passable(this.tileX, this.tileY, dir) || !this.passable(nx, ny, REVERSE[dir])) {
-      this.player.setFrame(ROW[dir] * 4);
-      // Como en RMXP: chocar con un evento de "contacto" lo activa (salidas sobre muros, puertas).
-      if (ev?.warp && ev.trigger !== 0) this.warp(ev.warp);
-      return;
-    }
-    this.walkTo(nx, ny, dir);
+  }
+
+  private checkAutorun(): boolean {
+    if (this.busy) return false;
+    const ev = this.mapEvents.find((e) => this.activePage(e)?.disparo === 3 && !e.running && e.autoDone !== e.page);
+    if (!ev) return false;
+    void this.runEvent(ev);
+    return true;
+  }
+
+  /** Tras un mensaje, un evento o un combate: automáticos y entrenadores que te ven. */
+  private afterEvents(): void {
+    if (this.busy) return;
+    if (!this.checkAutorun()) this.checkTrainers();
+  }
+
+  private unlock(): void {
+    this.locks = Math.max(0, this.locks - 1);
+    this.lastUnlock = this.time.now;
+    this.input.keyboard?.resetKeys();
   }
 
   // ------------------------------------------------------------- movimiento
+
+  update(time: number): void {
+    if (!this.player?.sprite) return;
+    this.moveEvents(time);
+    if (this.player.moving || this.busy) return;
+    const dir = this.heldDir();
+    if (!dir) return;
+    const p = this.player;
+    const [dx, dy] = DELTA[dir];
+    const nx = p.x + dx;
+    const ny = p.y + dy;
+    if (!this.inside(nx, ny)) {
+      p.turn(dir);
+      if (this.passable(p.x, p.y, dir)) this.tryConnection(dir);
+      return;
+    }
+    if (dir === 2 && this.terrainAt(nx, ny) === TERRAIN_LEDGE && !this.eventsAt(nx, ny).some((e) => e.ch.solid)) {
+      void p.jump(0, 2);
+      return;
+    }
+    if (this.canMove(p, dir)) {
+      void p.step(dir);
+      return;
+    }
+    p.turn(dir);
+    // Como en RMXP: chocar con un evento de contacto lo activa (puertas, salidas sobre muros).
+    this.touch(nx, ny);
+  }
+
+  /** Movimiento autónomo de los eventos: aleatorio o hacia el jugador. */
+  private moveEvents(time: number): void {
+    if (this.busy) return;
+    for (const ev of this.mapEvents) {
+      const pg = this.activePage(ev);
+      if (!pg || ev.running || ev.ch.moving || (pg.mov !== 1 && pg.mov !== 2)) continue;
+      if (time < ev.nextMove) continue;
+      // Frecuencia 1-6: de un paso cada ~3 s a uno seguido.
+      ev.nextMove = time + 2 ** (6 - ev.ch.freq) * 100 * (0.5 + Math.random());
+      const dirs: Dir[] = [2, 4, 6, 8];
+      const dir = pg.mov === 1 ? dirs[Math.floor(Math.random() * 4)] : this.dirToPlayer(ev.ch);
+      void ev.ch.step(dir);
+    }
+  }
+
+  private dirToPlayer(ch: Character): Dir {
+    const dx = this.player.x - ch.x;
+    const dy = this.player.y - ch.y;
+    return Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 6 : 4) : dy > 0 ? 2 : 8;
+  }
 
   private heldDir(): Dir | null {
     const c = this.cursors;
@@ -217,51 +328,6 @@ export class WorldScene extends Phaser.Scene {
     if (c.up.isDown || this.wasd.W.isDown) return 8;
     if (c.down.isDown || this.wasd.S.isDown) return 2;
     return null;
-  }
-
-  private walkTo(nx: number, ny: number, dir: Dir): void {
-    this.moving = true;
-    this.tileX = nx;
-    this.tileY = ny;
-    // Animación de paso: alterna los frames 1 y 3 de la fila, como RMXP.
-    this.stepFrame = (this.stepFrame + 2) % 4;
-    this.player.setFrame(ROW[dir] * 4 + 1 + this.stepFrame);
-    this.time.delayedCall(STEP_MS / 2, () => this.player.setFrame(ROW[dir] * 4));
-    this.tweens.add({
-      targets: this.player,
-      x: nx * TILE + TILE / 2,
-      y: (ny + 1) * TILE,
-      duration: STEP_MS,
-      onUpdate: () => this.player.setDepth(this.player.y / TILE - 0.5),
-      onComplete: () => {
-        this.moving = false;
-        this.onStep();
-      },
-    });
-  }
-
-  private jump(): void {
-    this.moving = true;
-    this.tileY += 2;
-    const startY = this.player.y;
-    this.tweens.addCounter({
-      from: 0,
-      to: 1,
-      duration: STEP_MS * 2,
-      onUpdate: (tw) => {
-        const t = tw.getValue() ?? 0;
-        this.player.y = startY + t * TILE * 2 - Math.sin(t * Math.PI) * 20;
-      },
-      onComplete: () => {
-        this.placePlayer();
-        this.moving = false;
-        this.onStep();
-      },
-    });
-  }
-
-  private placePlayer(): void {
-    this.player.setPosition(this.tileX * TILE + TILE / 2, (this.tileY + 1) * TILE).setDepth(this.tileY + 0.5);
   }
 
   private inside(x: number, y: number): boolean {
@@ -278,29 +344,63 @@ export class WorldScene extends Phaser.Scene {
     return parseInt(this.terreno[x + y * this.info.ancho] ?? '0', 16);
   }
 
-  private eventAt(x: number, y: number): MapEvent | undefined {
-    return this.mapEvents.find((e) => e.x === x && e.y === y);
+  private eventsAt(x: number, y: number): MapEvent[] {
+    return this.mapEvents.filter((e) => e.ch.x === x && e.ch.y === y && this.activePage(e));
+  }
+
+  /** Paso de RMXP: casillas del mapa, eventos sólidos y el jugador. */
+  canMove(ch: Character, dir: Dir): boolean {
+    const [dx, dy] = DELTA[dir];
+    const nx = ch.x + dx;
+    const ny = ch.y + dy;
+    if (!this.inside(nx, ny)) return false;
+    if (ch.through) return true;
+    if (!this.passable(ch.x, ch.y, dir) || !this.passable(nx, ny, REVERSE[dir])) return false;
+    for (const e of this.eventsAt(nx, ny)) {
+      if (e.ch === ch || e.ch.through) continue;
+      // Al jugador solo le bloquean los eventos con gráfico; a los eventos, cualquiera.
+      if (ch !== this.player || e.ch.sprite) return false;
+    }
+    if (ch !== this.player && this.player.x === nx && this.player.y === ny && !this.player.through) return false;
+    return true;
+  }
+
+  moved(ch: Character): void {
+    if (ch === this.player) this.onStep();
   }
 
   private onStep(): void {
-    const ev = this.eventAt(this.tileX, this.tileY);
-    if (ev?.warp && ev.trigger !== 0) return this.warp(ev.warp);
+    const p = this.player;
+    if (this.busy) return;
+    // Eventos de contacto en la casilla que se pisa (puertas, alfombras de salida...).
+    const here = this.eventsAt(p.x, p.y).find((e) => [1, 2].includes(this.activePage(e)!.disparo));
+    if (here) return void this.runEvent(here);
     if (this.checkTrainers()) return;
-    const t = this.terrainAt(this.tileX, this.tileY);
+    const t = this.terrainAt(p.x, p.y);
     if ((t === TERRAIN_GRASS || t === TERRAIN_TALL_GRASS) && Math.random() < encounterChance(this.mapId)) {
       this.startWildBattle();
     }
   }
 
+  private touch(x: number, y: number): void {
+    const ev = this.eventsAt(x, y).find((e) => [1, 2].includes(this.activePage(e)!.disparo));
+    if (ev) void this.runEvent(ev);
+  }
+
+  private position() {
+    return { mapId: this.mapId, x: this.player.x, y: this.player.y, dir: this.player.dir };
+  }
+
   // ------------------------------------------------------------- mapas
 
-  private warp(to: { mapa: number; x: number; y: number; dir: number }, say?: string[]): void {
+  private warp(to: { mapa: number; x: number; y: number; dir: number }, say?: string[], fade = true): void {
     if (!mundo.mapas[to.mapa]) return;
-    this.busy = true;
+    this.locks++;
+    this.leaving = true;
+    const go = () => void this.scene.restart({ mapId: to.mapa, x: to.x, y: to.y, dir: to.dir || this.player.dir, say } satisfies WorldData);
+    if (!fade) return go();
     this.cameras.main.fadeOut(200);
-    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
-      this.scene.restart({ mapId: to.mapa, x: to.x, y: to.y, dir: to.dir || this.facing, say } satisfies WorldData);
-    });
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, go);
   }
 
   /** Al salir por el borde, busca en connections.txt el mapa vecino. */
@@ -317,8 +417,8 @@ export class WorldScene extends Phaser.Scene {
         const [ax, ay] = anchor(this.info, c[a + 1] as string, c[a + 2] as number);
         const [bx, by] = anchor(other, c[b + 1] as string, c[b + 2] as number);
         const [dx, dy] = DELTA[dir];
-        const x = this.tileX + dx - ax + bx;
-        const y = this.tileY + dy - ay + by;
+        const x = this.player.x + dx - ax + bx;
+        const y = this.player.y + dy - ay + by;
         if (x >= 0 && y >= 0 && x < other.ancho && y < other.alto) {
           return this.warp({ mapa: other.id, x, y, dir });
         }
@@ -343,128 +443,181 @@ export class WorldScene extends Phaser.Scene {
   // ------------------------------------------------------------- interacción
 
   private interact(): void {
-    if (this.busy || this.moving) return;
-    const [dx, dy] = DELTA[this.facing];
+    if (this.busy || this.player.moving || this.time.now - this.lastUnlock < 150) return;
+    const p = this.player;
+    const [dx, dy] = DELTA[p.dir];
+    const actionable = (e: MapEvent, triggers: number[]) => triggers.includes(this.activePage(e)!.disparo);
+    // Primero lo que hay bajo los pies (eventos sin gráfico), luego lo de delante.
+    const here = this.eventsAt(p.x, p.y).find((e) => e.ch !== p && actionable(e, [0]));
+    const front = this.eventsAt(p.x + dx, p.y + dy).find((e) => actionable(e, [0, 1, 2]));
     // Por encima de un mostrador (casilla que no se puede pisar) se habla con quien está detrás.
-    const ev =
-      this.eventAt(this.tileX + dx, this.tileY + dy) ??
-      (this.passable(this.tileX + dx, this.tileY + dy, REVERSE[this.facing]) ? undefined : this.eventAt(this.tileX + 2 * dx, this.tileY + 2 * dy));
-    if (!ev) return;
-    if (ev.sprite && ev.blocks && !ev.warp) {
-      // El personaje se gira hacia el jugador.
-      ev.sprite.setFrame(ROW[REVERSE[this.facing]] * 4);
-    }
-    if (ev.trainer) this.talkToTrainer(ev);
-    else if (ev.heals) this.nurse(ev);
-    else if (ev.text) this.say(ev.text);
-    else if (ev.warp && ev.trigger === 0) this.warp(ev.warp);
-  }
-
-  // ------------------------------------------------------------- Centro Pokémon
-
-  private nurse(ev: MapEvent): void {
-    const intro = ev.text ?? ['¡Hola! Bienvenido al Centro Pokémon.'];
-    this.say(intro, () => {
-      this.busy = true;
-      healParty();
-      sfx(this, 'Pokemon Healing');
-      // Si pierdes un combate, vuelves aquí.
-      progress.regreso = { mapId: this.mapId, x: this.tileX, y: this.tileY, dir: this.facing };
-      const cam = this.cameras.main;
-      cam.flash(300, 255, 255, 255);
-      this.time.delayedCall(400, () => cam.flash(300, 255, 255, 255));
-      this.time.delayedCall(2400, () => {
-        saveGame({ mapId: this.mapId, x: this.tileX, y: this.tileY, dir: this.facing });
-        this.say(['Gracias por esperar.', 'Tu equipo Pokémon ha recuperado toda su energía.', '¡Esperamos volver a verte!']);
-      });
-    });
+    const counter = !front && !this.passable(p.x + dx, p.y + dy, REVERSE[p.dir])
+      ? this.eventsAt(p.x + 2 * dx, p.y + 2 * dy).find((e) => actionable(e, [0, 1, 2]))
+      : undefined;
+    const ev = here ?? front ?? counter;
+    if (ev) void this.runEvent(ev);
   }
 
   // ------------------------------------------------------------- entrenadores
 
-  private beaten(ev: MapEvent): boolean {
-    return progress.vencidos.includes(ev.key);
-  }
-
-  private talkToTrainer(ev: MapEvent): void {
-    const t = ev.trainer!;
-    if (this.beaten(ev)) return this.say(t.despues.length ? t.despues : [t.derrota || '...']);
-    if (!partyCanFight()) return this.say(['Tus Pokémon no están en condiciones de luchar.']);
-    this.say(t.intro.length ? t.intro : ['¡Vamos a luchar!'], () => this.startBattle(trainerTeam(t), ev));
-  }
-
-  /** ¿Algún entrenador no vencido te ve? Si es así, viene hacia ti y empieza el combate. */
+  /** ¿Algún entrenador te ve? Su evento ("Trainer(n)" con contacto del evento) se pone en marcha. */
   private checkTrainers(): boolean {
-    if (!partyCanFight()) return false;
+    if (this.busy || !partyCanFight()) return false;
+    const p = this.player;
     for (const ev of this.mapEvents) {
-      const t = ev.trainer;
-      if (!t || !t.vision || !ev.sprite || this.beaten(ev)) continue;
-      const [dx, dy] = DELTA[ev.dir];
-      for (let k = 1; k <= t.vision; k++) {
-        const x = ev.x + dx * k;
-        const y = ev.y + dy * k;
-        if (x === this.tileX && y === this.tileY) {
-          this.trainerSpotted(ev, k - 1);
+      const pg = this.activePage(ev);
+      if (!ev.vision || !pg || pg.disparo !== 2 || !ev.ch.sprite || ev.running) continue;
+      const [dx, dy] = DELTA[ev.ch.dir];
+      for (let k = 1; k <= ev.vision; k++) {
+        const x = ev.ch.x + dx * k;
+        const y = ev.ch.y + dy * k;
+        if (x === p.x && y === p.y) {
+          void this.runEvent(ev);
           return true;
         }
-        if (this.eventAt(x, y)?.blocks) break;
+        if (this.eventsAt(x, y).some((e) => e.ch.solid)) break;
       }
     }
     return false;
   }
 
-  private trainerSpotted(ev: MapEvent, steps: number): void {
-    this.busy = true;
-    const sprite = ev.sprite!;
+  // ------------------------------------------------------------- servicios para el intérprete
+
+  character(id: number, self: number): Character | undefined {
+    if (id === -1) return this.player;
+    const target = id === 0 ? self : id;
+    return this.mapEvents.find((e) => e.id === target)?.ch;
+  }
+
+  message(text: string, choices?: string[], cancel?: number): Promise<number> {
+    return new Promise((resolve) => {
+      const data: DialogData = {
+        lines: text ? [text] : [],
+        choices,
+        cancel,
+        onClose: (choice) => {
+          this.lastUnlock = this.time.now;
+          this.input.keyboard!.resetKeys();
+          resolve(choice);
+        },
+      };
+      this.scene.launch('Dialog', data);
+    });
+  }
+
+  wait(ms: number): Promise<void> {
+    return new Promise((resolve) => this.time.delayedCall(ms, resolve));
+  }
+
+  transfer(map: number, x: number, y: number, dir: number, fade: boolean): void {
+    this.warp({ mapa: map, x, y, dir }, undefined, fade);
+  }
+
+  erase(id: number): void {
+    const ev = this.mapEvents.find((e) => e.id === id);
+    if (!ev) return;
+    ev.erased = true;
+    ev.ch.routeId++;
+    ev.ch.setGraphic('');
+  }
+
+  playSound(folder: 'SE' | 'ME', name: string, volume = 0.8): void {
+    const key = `snd:${folder}/${name}`;
+    if (this.cache.audio.exists(key)) return void this.sound.play(key, { volume });
+    const file = mundo.sonidos?.[`${folder}/${name}`];
+    if (!file) return sfx(this, name, volume);
+    this.load.audio(key, `${ESS}sonidos/${file.split('/').map(encodeURIComponent).join('/')}`);
+    this.load.once(Phaser.Loader.Events.COMPLETE, () => {
+      if (this.cache.audio.exists(key)) this.sound.play(key, { volume });
+    });
+    this.load.start();
+  }
+
+  /** Tono de pantalla de RPG Maker (rojo, verde, azul, gris de -255 a 255), aproximado con un velo. */
+  tone(tone: number[], ms: number): void {
+    const [r, g, b] = tone;
+    const avg = (r + g + b) / 3;
+    const { width, height } = this.scale;
+    this.toneRect ??= this.add.rectangle(0, 0, width, height, 0x000000, 1).setOrigin(0).setScrollFactor(0).setDepth(15000).setAlpha(0);
+    const color = avg < 0 ? 0x000000 : 0xffffff;
+    this.toneRect.setFillStyle(color, 1);
+    this.tweens.add({ targets: this.toneRect, alpha: Math.min(1, Math.abs(avg) / 255), duration: Math.max(1, ms) });
+  }
+
+  flash(color: number[], ms: number): void {
+    this.cameras.main.flash(Math.max(50, ms), color[0], color[1], color[2]);
+  }
+
+  shake(power: number, ms: number): void {
+    this.cameras.main.shake(Math.max(50, ms), 0.002 * power);
+  }
+
+  exclaim(ch: Character): Promise<void> {
+    const sprite = ch.sprite;
+    if (!sprite) return Promise.resolve();
     const mark = this.add
       .text(sprite.x, sprite.y - sprite.height - 4, '!', { ...textStyle(28, '#e03030'), stroke: '#ffffff', strokeThickness: 4 })
       .setOrigin(0.5, 1)
       .setDepth(20000);
-    this.time.delayedCall(700, () => {
-      mark.destroy();
-      const [dx, dy] = DELTA[ev.dir];
-      const walk = (left: number) => {
-        if (left <= 0) {
-          this.facing = REVERSE[ev.dir];
-          this.player.setFrame(ROW[this.facing] * 4);
-          return this.talkToTrainer(ev);
-        }
-        ev.x += dx;
-        ev.y += dy;
-        sprite.setFrame(ROW[ev.dir] * 4 + 1 + (left % 2) * 2);
-        this.tweens.add({
-          targets: sprite,
-          x: ev.x * TILE + TILE / 2,
-          y: (ev.y + 1) * TILE,
-          duration: STEP_MS,
-          onComplete: () => {
-            sprite.setFrame(ROW[ev.dir] * 4).setDepth(ev.y);
-            walk(left - 1);
-          },
-        });
-      };
-      walk(steps);
-    });
+    return this.wait(700).then(() => void mark.destroy());
   }
+
+  setRespawn(): void {
+    progress.regreso = this.position();
+  }
+
+  /** Tienda (pbPokemonMart): compra de una en una con el dinero del jugador. */
+  async shop(items: string[]): Promise<void> {
+    const list = items.filter((id) => objetos[id]);
+    await this.message('¡Bienvenido! ¿En qué puedo ayudarte?');
+    for (;;) {
+      const names = list.map((id) => `${objetos[id].nombre}  ${objetos[id].precio} ₽`);
+      const pick = await this.message(`Tienes ${progress.dinero} ₽. ¿Qué quieres comprar?`, [...names, 'Salir'], list.length);
+      if (pick < 0 || pick >= list.length) break;
+      const it = objetos[list[pick]];
+      if (progress.dinero < it.precio) {
+        await this.message('No tienes suficiente dinero.');
+        continue;
+      }
+      progress.dinero -= it.precio;
+      addItem(list[pick]);
+      await this.message(`¡Aquí tienes! Has comprado ${it.nombre}.`);
+    }
+    await this.message('¡Vuelve cuando quieras!');
+    saveGame(this.position());
+  }
+
+  async openPC(): Promise<void> {
+    await this.message(`Has encendido el PC. Tienes ${pc.length} Pokémon guardados.`);
+  }
+
+  gameOver(): void {
+    this.respawn(['Todo se vuelve negro...']);
+  }
+
+  battle(t: Entrenador): Promise<BattleResult> {
+    return this.startBattle(trainerTeam(t), t);
+  }
+
+  // ------------------------------------------------------------- menús
 
   /** Resumen del equipo y la mochila (X o Esc), a falta de un menú de pausa completo. */
   private showParty(): void {
-    if (this.busy || this.moving) return;
+    if (this.busy || this.player.moving) return;
     const rows = party.map(({ spec, hp }) => `${spec.nombre}  Nv.${spec.nivel}  ${hp === 0 ? '(debilitado)' : hp == null ? 'PS al máximo' : `PS ${hp}`}`);
     const pages: string[] = [];
     for (let i = 0; i < rows.length; i += 2) pages.push(rows.slice(i, i + 2).join('\n'));
-    const balls = Object.keys(BALLS).filter((b) => bag[b]).map((b) => `${BALLS[b].nombre} x${bag[b]}`);
-    pages.push(`Dinero: ${progress.dinero} ₽. Mochila: ${balls.join(', ') || 'vacía'}.` + (pc.length ? ` PC: ${pc.length} Pokémon.` : ''));
+    const items = Object.keys(bag).map((b) => `${BALLS[b]?.nombre ?? objetos[b]?.nombre ?? b} x${bag[b]}`);
+    pages.push(`Dinero: ${progress.dinero} ₽. Mochila: ${items.join(', ') || 'vacía'}.` + (pc.length ? ` PC: ${pc.length} Pokémon.` : ''));
     this.say(pages);
   }
 
   private say(lines: string[], onClose?: () => void): void {
-    this.busy = true;
+    this.locks++;
     const data: DialogData = {
       lines,
       onClose: () => {
-        this.busy = false;
-        this.input.keyboard!.resetKeys();
+        this.unlock();
         onClose?.();
       },
     };
@@ -476,44 +629,45 @@ export class WorldScene extends Phaser.Scene {
   private startWildBattle(): void {
     const foe = rollEncounter(this.mapId);
     if (!foe || !partyCanFight()) return;
-    this.startBattle([foe]);
+    void this.startBattle([foe]);
   }
 
-  private startBattle(foes: PokemonSpec[], trainerEvent?: MapEvent): void {
-    this.busy = true;
+  private startBattle(foes: PokemonSpec[], trainer?: Entrenador): Promise<BattleResult> {
+    this.locks++;
     const cam = this.cameras.main;
     cam.flash(250, 255, 255, 255);
     this.time.delayedCall(300, () => cam.flash(250, 255, 255, 255));
-    this.time.delayedCall(650, () => {
-      const data: BattleData = {
-        foes,
-        trainer: trainerEvent?.trainer,
-        background: this.info.fondoCombate,
-        onEnd: (result) => this.afterBattle(result, trainerEvent),
-      };
-      this.scene.pause();
-      this.scene.launch('Battle', data);
+    return new Promise((resolve) => {
+      this.time.delayedCall(650, () => {
+        const data: BattleData = {
+          foes,
+          trainer,
+          background: this.info.fondoCombate,
+          onEnd: (result) => {
+            this.scene.resume();
+            this.unlock();
+            if (result === 'lose') {
+              this.respawn(['¡No te quedan Pokémon en condiciones de luchar!']);
+            } else {
+              saveGame(this.position());
+              // Un combate salvaje no viene de un evento: se miran los entrenadores al volver.
+              if (!trainer) this.afterEvents();
+            }
+            resolve(result);
+          },
+        };
+        this.scene.pause();
+        this.scene.launch('Battle', data);
+      });
     });
   }
 
-  private afterBattle(result: BattleResult, trainerEvent?: MapEvent): void {
-    this.scene.resume();
-    this.busy = false;
-    if (result === 'win' && trainerEvent) progress.vencidos.push(trainerEvent.key);
-    if (result === 'lose') {
-      // Como en Essentials: vuelves al último Centro Pokémon (o a casa) con el equipo curado.
-      healParty();
-      const back = progress.regreso;
-      const to = back ? { mapa: back.mapId, x: back.x, y: back.y, dir: back.dir } : mundo.inicio;
-      saveGame({ mapId: to.mapa, x: to.x, y: to.y, dir: to.dir });
-      this.busy = true;
-      this.warp(to, [
-        '¡No te quedan Pokémon en condiciones de luchar!',
-        back ? 'Vuelves corriendo al Centro Pokémon y tu equipo se recupera.' : 'Vuelves corriendo a casa y tu equipo se recupera.',
-      ]);
-      return;
-    }
-    saveGame();
-    this.checkTrainers();
+  /** Como en Essentials: vuelves al último Centro Pokémon (o a casa) con el equipo curado. */
+  private respawn(first: string[]): void {
+    healParty();
+    const back = progress.regreso;
+    const to = back ? { mapa: back.mapId, x: back.x, y: back.y, dir: back.dir } : mundo.inicio;
+    saveGame({ mapId: to.mapa, x: to.x, y: to.y, dir: to.dir });
+    this.warp(to, [...first, back ? 'Vuelves corriendo al Centro Pokémon y tu equipo se recupera.' : 'Vuelves corriendo a casa y tu equipo se recupera.']);
   }
 }

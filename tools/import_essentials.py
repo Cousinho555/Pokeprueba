@@ -6,7 +6,7 @@ Uso:
 
 Lee la carpeta del proyecto de RPG Maker XP y genera, dentro de
 public/assets/essentials/:
-  - maps/mapNNN.tmj      mapas convertidos a formato Tiled (32x32)
+  - maps/mapNNN.tmj      mapas convertidos a formato Tiled (32x32), con sus eventos completos
   - tilesets/, autotiles/ imágenes de tilesets (los autotiles se expanden a 48 variantes)
   - characters/          hojas de personajes usadas por los mapas y el jugador
   - battlers/, battlebacks/, fonts/
@@ -144,28 +144,6 @@ def page_commands(page) -> list[tuple[int, list]]:
     return [(attrs(c)["@code"], attrs(c)["@parameters"]) for c in attrs(page)["@list"]]
 
 
-def page_texts(cmds, stop=lambda code, params: False) -> list[str]:
-    """Mensajes (101 + 401) de una página, hasta que `stop` diga basta."""
-    texts: list[str] = []
-    for code, params in cmds:
-        if stop(code, params):
-            break
-        if code == 101:
-            texts.append(s(params[0]))
-        elif code == 401 and texts:
-            texts[-1] += " " + s(params[0])
-    return [t for t in (clean_text(t) for t in texts) if t]
-
-
-def script_of(code: int, params) -> str | None:
-    """Texto de Ruby de un comando de script (355/655) o de una condición de script (111)."""
-    if code in (355, 655):
-        return s(params[0])
-    if code == 111 and params[0] == 12:
-        return s(params[1])
-    return None
-
-
 TRAINER_BATTLE = re.compile(
     r'pbTrainerBattle\(PBTrainers::(\w+),\s*"([^"]*)",\s*_I\("((?:[^"\\]|\\.)*)"\)(?:,\s*(?:true|false))?(?:,\s*(\d+))?')
 CUSTOM_MON = re.compile(r"createPokemon\(:(\w+),\s*(\d+)(?:,\s*\[([^\]]*)\])?")
@@ -173,72 +151,131 @@ CUSTOM_TRAINER = re.compile(r'createTrainer\(:(\w+),\s*"([^"]*)"')
 CUSTOM_DEFEAT = re.compile(r'customTrainerBattle\([^,]*,\s*_I\("((?:[^"\\]|\\.)*)"\)')
 
 
-def trainer_info(cmds, after_cmds) -> dict | None:
-    """Entrenador de un evento: equipo, clase, frase de derrota y textos de antes y después."""
-    lines, battle_at = [], None
-    for i, (code, params) in enumerate(cmds):
-        sc = script_of(code, params)
-        if sc is None:
-            continue
-        lines.append(sc)
-        if battle_at is None and ("pbTrainerBattle(" in sc or "customTrainerBattle(" in " ".join(lines)):
-            battle_at = i
-    script = " ".join(lines)
+def trainer_of(script: str, page_script: str) -> dict | None:
+    """Combate de entrenador de un script: equipo (de trainers.txt o del propio script), clase y derrota."""
     team = None
     if m := TRAINER_BATTLE.search(script):
         ttype, name, defeat, party_id = m.group(1), m.group(2), m.group(3), int(m.group(4) or 0)
         team = TRAINERS.get((ttype, name, party_id)) or TRAINERS.get((ttype, name, 0))
-    elif (t := CUSTOM_TRAINER.search(script)) and (d := CUSTOM_DEFEAT.search(script)):
+    elif (d := CUSTOM_DEFEAT.search(script)) and (t := CUSTOM_TRAINER.search(page_script)):
         ttype, name, defeat = t.group(1), t.group(2), d.group(1)
         team = [[sp, int(lv), [x.strip().lstrip(":") for x in mv.split(",") if x.strip()] if mv else []]
-                for sp, lv, mv in CUSTOM_MON.findall(script)]
+                for sp, lv, mv in CUSTOM_MON.findall(page_script)]
     if not team or ttype not in TRAINER_TYPES:
         return None
     tt = TRAINER_TYPES[ttype]
-    first_script = next(i for i, (c, p) in enumerate(cmds) if script_of(c, p) is not None and
-                        ("pbTrainerBattle(" in script_of(c, p) or "party" in script_of(c, p) or "createPokemon" in script_of(c, p)))
-    intro = page_texts(cmds[:first_script], lambda c, p: c in (102, 402, 403))
     return {"clase": tt["nombre"], "nombre": name, "sprite": tt["id"], "dinero": tt["dinero"],
-            "derrota": clean_text(defeat.replace("\\", "")), "equipo": team, "intro": intro,
-            "despues": page_texts(after_cmds, lambda c, p: c in (102, 111, 402, 403)) if after_cmds else []}
+            "derrota": clean_text(defeat.replace("\\", "")), "equipo": team}
+
+
+def jsonable(x):
+    """Parámetros de comandos de RMXP (rutas de movimiento, sonidos, tonos) en JSON."""
+    if isinstance(x, (bytes, bytearray)):
+        return s(x)
+    if isinstance(x, list):
+        return [jsonable(y) for y in x]
+    if isinstance(x, (int, float, str, bool)) or x is None:
+        return x
+    cls = getattr(x, "ruby_class_name", "")
+    if cls == "Tone" or cls == "Color":
+        return list(struct.unpack_from("<4d", x._private_data))
+    if cls == "RPG::AudioFile":
+        a = attrs(x)
+        return {"nombre": s(a["@name"]), "volumen": a["@volume"], "tono": a["@pitch"]}
+    if cls == "RPG::MoveRoute":
+        a = attrs(x)
+        return {"repite": a["@repeat"], "salta": a["@skippable"],
+                "lista": [[attrs(c)["@code"], jsonable(attrs(c)["@parameters"])] for c in a["@list"]]}
+    return None
+
+
+def export_commands(page) -> list:
+    """Lista de comandos [código, sangría, parámetros...] lista para el intérprete del juego.
+    Los scripts multilínea (355 + 655) se unen y los combates de entrenador llevan su equipo."""
+    raw = [attrs(c) for c in attrs(page)["@list"]]
+    page_script = " ".join(s(c["@parameters"][0]) for c in raw if c["@code"] in (355, 655))
+    out: list = []
+    for c in raw:
+        code, ind, params = c["@code"], c["@indent"], c["@parameters"]
+        if code == 509:  # continuación de ruta de movimiento (ya va en el 209)
+            continue
+        if code == 655 and out and out[-1][0] == 355:
+            out[-1][2] += "\n" + s(params[0])
+            continue
+        if code == 408 and out and out[-1][0] == 108:
+            continue
+        out.append([code, ind, *jsonable(list(params))])
+    for cmd in out:
+        sc = cmd[2] if cmd[0] == 355 else cmd[3] if cmd[0] == 111 and cmd[2] == 12 else None
+        if sc and ("pbTrainerBattle(" in sc or "customTrainerBattle(" in sc):
+            if tr := trainer_of(sc, page_script):
+                cmd.append(tr)
+    return out
 
 
 def event_info(ev) -> dict | None:
     e = attrs(ev)
-    pages = e["@pages"]
-    page = attrs(pages[0])
-    g = attrs(page["@graphic"])
-    cmds = page_commands(pages[0])
-    info: dict = {"id": e["@id"], "nombre": s(e["@name"]), "x": e["@x"], "y": e["@y"],
-                  "grafico": s(g["@character_name"]), "direccion": g["@direction"],
-                  "patron": g["@pattern"], "atraviesa": bool(page["@through"]),
-                  "disparo": page["@trigger"]}
-    for code, params in cmds:
-        if code in (102, 111, 402, 403):  # elecciones y condiciones: cortamos ahí
-            break
-        if code == 201 and params[0] == 0:
-            info["warp"] = {"mapa": params[1], "x": params[2], "y": params[3], "dir": params[4]}
-    texts = page_texts(cmds, lambda c, p: c in (102, 111, 402, 403))
-
-    # Enfermera del Centro Pokémon: cura al equipo (314) y fija el punto de regreso.
-    if any(code == 314 for code, _ in cmds):
-        info["cura"] = True
-        texts = [t for t in texts if not t.endswith("?")]
-    # Entrenadores: los que combaten al verte se llaman "Trainer(alcance)".
-    if info["grafico"]:
-        after = page_commands(pages[1]) if len(pages) > 1 else None
-        tr = trainer_info(cmds, after)
-        if tr:
-            m = re.match(r"Trainer\((\d+)\)", info["nombre"])
-            tr["vision"] = int(m.group(1)) if m and info["disparo"] == 2 else 0
-            info["entrenador"] = tr
-            texts = []
-
-    if texts:
-        info["texto"] = texts
-    if not info["grafico"] and "warp" not in info and not texts:
+    pages = []
+    for pg in e["@pages"]:
+        p = attrs(pg)
+        c, g, mr = attrs(p["@condition"]), attrs(p["@graphic"]), p["@move_route"]
+        cond = {}
+        if c["@switch1_valid"]:
+            cond["s1"] = c["@switch1_id"]
+        if c["@switch2_valid"]:
+            cond["s2"] = c["@switch2_id"]
+        if c["@variable_valid"]:
+            cond["v"] = [c["@variable_id"], c["@variable_value"]]
+        if c["@self_switch_valid"]:
+            cond["ss"] = s(c["@self_switch_ch"])
+        pages.append({
+            "cond": cond,
+            "grafico": s(g["@character_name"]), "dir": g["@direction"], "patron": g["@pattern"],
+            "tile": g["@tile_id"], "opacidad": g["@opacity"],
+            "disparo": p["@trigger"], "atraviesa": bool(p["@through"]), "fijo": bool(p["@direction_fix"]),
+            "anda": bool(p["@walk_anime"]), "paso": bool(p["@step_anime"]), "encima": bool(p["@always_on_top"]),
+            "mov": p["@move_type"], "vel": p["@move_speed"], "frec": p["@move_frequency"],
+            "ruta": jsonable(mr) if p["@move_type"] == 3 else None,
+            "lista": export_commands(pg),
+        })
+    if all(not pg["grafico"] and not pg["tile"] and len(pg["lista"]) <= 1 for pg in pages):
         return None
-    return info
+    name = s(e["@name"])
+    m = re.match(r"Trainer\((\d+)\)", name)
+    return {"id": e["@id"], "nombre": name, "x": e["@x"], "y": e["@y"], "vision": int(m.group(1)) if m else 0,
+            "paginas": pages}
+
+
+def event_graphics(info: dict) -> set[str]:
+    """Personajes que puede mostrar un evento: los de sus páginas y los de sus rutas (cambiar gráfico)."""
+    out = {pg["grafico"] for pg in info["paginas"] if pg["grafico"]}
+
+    def routes(pg):
+        if pg["ruta"]:
+            yield pg["ruta"]
+        for cmd in pg["lista"]:
+            if cmd[0] == 209:
+                yield cmd[3]
+    for pg in info["paginas"]:
+        for r in routes(pg):
+            out |= {p[0] for code, p in r["lista"] if code == 41 and p and p[0]}
+    return out
+
+
+def event_sounds(info: dict) -> set[tuple[str, str]]:
+    """Sonidos (carpeta, nombre) que usan los comandos de un evento."""
+    out = set()
+    for pg in info["paginas"]:
+        for cmd in pg["lista"]:
+            if cmd[0] in (249, 250) and cmd[2]["nombre"]:
+                out.add(("ME" if cmd[0] == 249 else "SE", cmd[2]["nombre"]))
+            if cmd[0] == 355 and (m := re.search(r'pbSEPlay\("([^"]+)"', cmd[2])):
+                out.add(("SE", m.group(1)))
+            if cmd[0] == 209:
+                for code, p in cmd[3]["lista"]:
+                    if code == 44 and p and p[0]["nombre"]:
+                        out.add(("SE", p[0]["nombre"]))
+    return out
 
 
 def convert_map(map_id: int, name: str, data_dir: Path, tilesets: dict, out_maps: Path) -> dict | None:
@@ -303,7 +340,7 @@ def convert_map(map_id: int, name: str, data_dir: Path, tilesets: dict, out_maps
     objects = []
     for i, ev in enumerate(sorted(events, key=lambda e: e["id"])):
         props = [{"name": k, "type": "string", "value": json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v}
-                 for k, v in ev.items() if k not in ("id", "nombre", "x", "y")]
+                 for k, v in ev.items() if k not in ("nombre", "x", "y")]
         objects.append({"id": i + 1, "name": ev["nombre"], "type": "evento", "point": True,
                         "x": ev["x"] * T + T / 2, "y": ev["y"] * T + T / 2, "width": 0, "height": 0,
                         "rotation": 0, "visible": True, "properties": props})
@@ -334,8 +371,8 @@ def convert_map(map_id: int, name: str, data_dir: Path, tilesets: dict, out_maps
     (out_maps / f"map{map_id:03d}.tmj").write_text(json.dumps(tmj, ensure_ascii=False, separators=(",", ":")))
     return {"id": map_id, "nombre": name, "ancho": w, "alto": h, "tileset": ts_id,
             "autotiles": ts["autotile_key"], "imagen": ts["file"], "bgm": s(attrs(m["@bgm"])["@name"]),
-            "graficos": sorted({e["grafico"] for e in events if e["grafico"]}),
-            "entrenadores": [e["entrenador"]["sprite"] for e in events if "entrenador" in e]}
+            "graficos": sorted(set().union(*(event_graphics(e) for e in events))),
+            "sonidos": sorted(set().union(*(event_sounds(e) for e in events)))}
 
 
 # ------------------------------------------------------------------ PBS
@@ -434,6 +471,19 @@ def read_connections(pbs: Path) -> list:
 
 TRAINERS: dict = {}
 TRAINER_TYPES: dict = {}
+
+
+def read_items(pbs: Path) -> dict:
+    """items.txt: id, NOMBRE, nombre, plural, bolsillo, precio, descripción, uso fuera, uso en combate, tipo, MT."""
+    out = {}
+    with open(pbs / "items.txt", encoding="utf-8-sig") as f:
+        for row in csv.reader(f):
+            if len(row) < 10 or row[0].startswith("#"):
+                continue
+            out[row[1]] = {"id": int(row[0]), "nombre": row[2], "plural": row[3], "bolsillo": int(row[4]), "precio": int(row[5]),
+                           "descripcion": row[6], "usoMapa": int(row[7]), "usoCombate": int(row[8]),
+                           "mt": row[10] if len(row) > 10 else ""}
+    return out
 
 
 def read_trainer_types(pbs: Path) -> dict:
@@ -640,7 +690,7 @@ def convert_animations(src: Path) -> None:
 BATTLE_SE = ["Battle ball drop", "Battle ball hit", "Battle ball shake", "Battle catch click", "Battle damage normal",
              "Battle damage super", "Battle damage weak", "Battle flee", "Battle jump to ball", "Battle recall",
              "Battle throw", "Open Pokeball"]
-BATTLE_ME = ["Pokemon Healing", "EvolutionSuccess"]
+BATTLE_ME = ["Pokemon Healing", "EvolutionSuccess", "Jingle - HMTM"]
 # Gráficos de Poké Ball de Essentials (Graphics/Pictures/Battle/ballNN.png) para las que hay en el juego.
 BALL_PICTURES = {"POKEBALL": 0, "GREATBALL": 1, "ULTRABALL": 3}
 
@@ -745,13 +795,21 @@ def main(src: Path) -> None:
     for f in (gfx / "Battlebacks").iterdir():
         if f.suffix.lower() == ".png":
             shutil.copy(f, OUT / "battlebacks" / f.name)
-    # Sprites de combate de los entrenadores que aparecen en los mapas
-    for sid in sorted({e for m in mapas.values() for e in m.pop("entrenadores")}):
+    # Sprites de combate de todas las clases de entrenador (los eventos pueden usar cualquiera)
+    for sid in sorted({tt["id"] for tt in TRAINER_TYPES.values()}):
         img = gfx / "Battlers" / "Trainers" / f"trainer{sid:03d}.png"
         if img.exists():
             shutil.copy(img, OUT / "trainers" / f"{sid}.png")
     for f in (src / "Fonts").glob("pkmnem*.ttf"):
         shutil.copy(f, OUT / "fonts" / f.name)
+
+    # Efectos de sonido y melodías que usan los eventos
+    sonidos = {}
+    for folder, name in sorted({x for m in mapas.values() for x in map(tuple, m.pop("sonidos"))}):
+        if f := find_audio(src / "Audio" / folder, name):
+            (OUT / "sonidos" / folder).mkdir(parents=True, exist_ok=True)
+            shutil.copy(f, OUT / "sonidos" / folder / f"{name}{f.suffix.lower()}")
+            sonidos[f"{folder}/{name}"] = f"{folder}/{name}{f.suffix.lower()}"
 
     home = [int(x) for x in metadata.get(0, {}).get("Home", "2,8,8,2").split(",")]
     world = {
@@ -761,12 +819,14 @@ def main(src: Path) -> None:
         "mapas": mapas,
         "conexiones": read_connections(pbs),
         "encuentros": read_encounters(pbs),
+        "sonidos": sonidos,
     }
     dump = lambda name, obj: (OUT / "data" / name).write_text(json.dumps(obj, ensure_ascii=False, separators=(",", ":")))
     dump("mundo.json", world)
     dump("especies.json", read_species(pbs))
     dump("movimientos.json", read_named_csv(pbs / "moves.txt", 2))
     dump("habilidades.json", read_named_csv(pbs / "abilities.txt", 2))
+    dump("objetos.json", read_items(pbs))
 
     for credits in (src / "Créditos.txt", src.parent / "Créditos.txt"):
         if credits.exists():
