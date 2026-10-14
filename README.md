@@ -11,7 +11,7 @@ npm run dev
 
 Abre la URL que muestra Vite (normalmente http://localhost:5173).
 
-Controles: flechas o WASD para moverte, **Z / Enter / Espacio** para interactuar y avanzar texto, **X / Esc** para ver tu equipo y la mochila. En combate también se puede usar el ratón. La partida se guarda sola en el navegador.
+Controles: flechas o WASD para moverte, **Z / Enter / Espacio** para interactuar y avanzar texto, **Esc / X** para abrir el menú de pausa (Pokédex, equipo, mochila, monedero y guardar). En combate también se puede usar el ratón. La partida se guarda sola en el navegador.
 
 Lo que ya funciona:
 
@@ -52,7 +52,9 @@ src/
     essentials.ts      datos importados (especies, movimientos, mapas, encuentros)
     party.ts           equipo del jugador
 public/assets/essentials/  recursos generados por el importador
+public/assets/ui/          pixel art propio del menú y la mochila
 tools/import_essentials.py importa un proyecto de Essentials BES
+tools/draw_ui.py           dibuja el pixel art de public/assets/ui
 ```
 
 El simulador de Showdown se carga solo al entrar en el primer combate, así el mapa arranca rápido.
@@ -65,6 +67,8 @@ Los recursos de `public/assets/essentials/` salen de un proyecto de Essentials B
 python3 -m pip install rubymarshal pillow
 python3 tools/import_essentials.py "ruta/a/Pokémon Essentials BES"
 ```
+
+El pixel art del menú de pausa, la mochila abierta y los iconos de objetos es propio: lo dibuja `python3 tools/draw_ui.py` (solo necesita Pillow), así que para retocarlo se cambia el script y se vuelve a ejecutar.
 
 El script lee `Data/` (mapas `.rxdata`, tilesets), `Graphics/` y `PBS/`, y lo regenera todo. Así, si cambias mapas o datos en RPG Maker o en los PBS, basta con volver a ejecutarlo.
 

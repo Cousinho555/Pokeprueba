@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { ESS, registerEssentials, type Especie, type Mundo } from '../data/essentials';
 import { initParty } from '../data/party';
 import { loadGame } from '../data/save';
+import { UI } from '../ui';
 
 const SOUNDS = [
   'Battle ball drop', 'Battle ball hit', 'Battle ball shake', 'Battle catch click', 'Battle damage normal',
@@ -33,6 +34,14 @@ export class BootScene extends Phaser.Scene {
     this.load.json('objetos', `${ESS}data/objetos.json`);
     // Sonidos de combate, del Centro Pokémon y de la evolución (los de los ataques se cargan al usarlos).
     for (const name of SOUNDS) this.load.audio(`sfx:${name}`, `${ESS}combate/${encodeURIComponent(name)}.ogg`);
+    // Menú de pausa y mochila (pixel art propio, tools/draw_ui.py)
+    this.load.spritesheet('ui:menu', `${UI}menu_iconos.png`, { frameWidth: 16, frameHeight: 16 });
+    this.load.spritesheet('ui:items', `${UI}objetos_iconos.png`, { frameWidth: 16, frameHeight: 16 });
+    this.load.image('ui:bag', `${UI}mochila.png`);
+    this.load.image('ui:bagbg', `${UI}mochila_fondo.png`);
+    this.load.image('ui:partybg', `${UI}equipo_fondo.png`);
+    this.load.image('ui:dexbg', `${UI}pokedex_fondo.png`);
+    this.load.audio('sfx:menu', `${ESS}sonidos/SE/menu.ogg`);
     for (const ball of ['POKEBALL', 'GREATBALL', 'ULTRABALL']) {
       this.load.image(`ball:${ball}`, `${ESS}combate/${ball}.png`);
       this.load.image(`ballopen:${ball}`, `${ESS}combate/${ball}_open.png`);
@@ -53,10 +62,10 @@ export class BootScene extends Phaser.Scene {
     }
 
     if (saved && mundo.mapas[saved.mapId]) {
-      this.scene.start('World', { ...saved, say: ['Partida cargada. Pulsa X para ver tu equipo.'] });
+      this.scene.start('World', { ...saved, say: ['Partida cargada. Pulsa Esc o X para abrir el menú.'] });
     } else {
       const { mapa, x, y, dir } = mundo.inicio;
-      this.scene.start('World', { mapId: mapa, x, y, dir, say: ['¡Bienvenido! Pulsa X para ver tu equipo y tu mochila.'] });
+      this.scene.start('World', { mapId: mapa, x, y, dir, say: ['¡Bienvenido! Pulsa Esc o X para abrir el menú: equipo, mochila, monedero...'] });
     }
   }
 }

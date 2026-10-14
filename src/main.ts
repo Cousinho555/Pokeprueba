@@ -3,6 +3,10 @@ import { BootScene } from './scenes/BootScene';
 import { WorldScene } from './scenes/WorldScene';
 import { BattleScene } from './scenes/BattleScene';
 import { DialogScene } from './scenes/DialogScene';
+import { MenuScene } from './scenes/MenuScene';
+import { BagScene } from './scenes/BagScene';
+import { PartyScene } from './scenes/PartyScene';
+import { DexScene } from './scenes/DexScene';
 
 // Misma resolución que Pokémon Essentials (RPG Maker XP).
 export const GAME_WIDTH = 512;
@@ -19,5 +23,6 @@ new Phaser.Game({
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [BootScene, WorldScene, BattleScene, DialogScene],
+  // El orden es el de dibujado: los diálogos van encima del menú.
+  scene: [BootScene, WorldScene, BattleScene, MenuScene, BagScene, PartyScene, DexScene, DialogScene],
 });
