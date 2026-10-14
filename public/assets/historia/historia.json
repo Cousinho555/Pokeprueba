@@ -1,5 +1,10 @@
 {
-  "inicio": { "mapa": 900, "x": 7, "y": 8, "dir": 8 },
+  "inicio": {
+    "mapa": 900,
+    "x": 7,
+    "y": 8,
+    "dir": 8
+  },
   "interruptor": 100,
   "mapas": {
     "900": {
@@ -11,10 +16,80 @@
       "autotiles": 4,
       "imagen": "Poke Centre interior.png",
       "bgm": "",
-      "graficos": ["Pokemon 01"],
+      "graficos": [
+        "Pokemon 01"
+      ],
       "exterior": false,
       "fondoCombate": "IndoorB",
       "archivo": "assets/historia/maps/intro.tmj"
+    },
+    "2": {
+      "id": 2,
+      "nombre": "El Puerto de Santa María",
+      "ancho": 46,
+      "alto": 40,
+      "tileset": 1,
+      "autotiles": 1,
+      "imagen": "Outside.png",
+      "bgm": "Town",
+      "graficos": [
+        "Domingero",
+        "NPC 06",
+        "Pokemon 09",
+        "Pokemon 11",
+        "doors3",
+        "doors5",
+        "trchar009",
+        "trchar027",
+        "trchar037",
+        "trchar038"
+      ],
+      "exterior": true,
+      "fondoCombate": "Field",
+      "archivo": "assets/historia/maps/puerto.tmj",
+      "tilesets": {
+        "puerto": "assets/historia/tilesets/puerto.png"
+      }
     }
+  },
+  "conexiones": [
+    [
+      2,
+      "N",
+      2,
+      5,
+      "S",
+      0
+    ],
+    [
+      69,
+      "N",
+      0,
+      2,
+      "S",
+      14
+    ],
+    [
+      2,
+      "W",
+      0,
+      66,
+      "E",
+      0
+    ]
+  ],
+  "traslados": {
+    "2,8,7": [
+      14,
+      10
+    ],
+    "2,17,7": [
+      5,
+      10
+    ],
+    "2,18,13": [
+      16,
+      27
+    ]
   }
 }

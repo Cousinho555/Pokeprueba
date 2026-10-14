@@ -1,0 +1,171 @@
+{
+ "columnas": 16,
+ "piezas": {
+  "sombrilla_roja": {
+   "origen": 276,
+   "ancho": 1,
+   "alto": 2,
+   "mascara": [
+    "^",
+    "."
+   ]
+  },
+  "sombrilla_azul": {
+   "origen": 277,
+   "ancho": 1,
+   "alto": 2,
+   "mascara": [
+    "^",
+    "."
+   ]
+  },
+  "casa_a": {
+   "origen": 208,
+   "ancho": 5,
+   "alto": 4,
+   "mascara": [
+    "#####",
+    "#####",
+    "#####",
+    "#####"
+   ]
+  },
+  "casa_b": {
+   "origen": 120,
+   "ancho": 5,
+   "alto": 5,
+   "mascara": [
+    "#####",
+    "#####",
+    "#####",
+    "#####",
+    "#####"
+   ]
+  },
+  "bodega": {
+   "origen": 213,
+   "ancho": 8,
+   "alto": 4,
+   "mascara": [
+    "########",
+    "########",
+    "########",
+    "########"
+   ]
+  },
+  "castillo": {
+   "origen": 112,
+   "ancho": 8,
+   "alto": 6,
+   "mascara": [
+    "########",
+    "########",
+    "########",
+    "########",
+    "########",
+    "########"
+   ]
+  },
+  "prioral": {
+   "origen": 0,
+   "ancho": 6,
+   "alto": 7,
+   "mascara": [
+    ".....#",
+    "....##",
+    "######",
+    "######",
+    "######",
+    "######",
+    "######"
+   ]
+  },
+  "plaza_toros": {
+   "origen": 6,
+   "ancho": 10,
+   "alto": 7,
+   "mascara": [
+    "..######..",
+    ".#########",
+    "##########",
+    "##########",
+    "##########",
+    ".#########",
+    "..######.."
+   ]
+  },
+  "palmera": {
+   "origen": 221,
+   "ancho": 3,
+   "alto": 3,
+   "mascara": [
+    "^^^",
+    "^^^",
+    ".#."
+   ]
+  },
+  "naranjo": {
+   "origen": 278,
+   "ancho": 1,
+   "alto": 2,
+   "mascara": [
+    "^",
+    "#"
+   ]
+  },
+  "farola": {
+   "origen": 279,
+   "ancho": 1,
+   "alto": 2,
+   "mascara": [
+    "^",
+    "#"
+   ]
+  },
+  "azulejo": {
+   "origen": 321,
+   "ancho": 1,
+   "alto": 1,
+   "mascara": [
+    "#"
+   ]
+  },
+  "toro": {
+   "origen": 272,
+   "ancho": 4,
+   "alto": 3,
+   "mascara": [
+    "^^^^",
+    "^^^^",
+    ".##."
+   ]
+  },
+  "vapor": {
+   "origen": 280,
+   "ancho": 5,
+   "alto": 2,
+   "mascara": [
+    "#####",
+    "#####"
+   ]
+  },
+  "puesto_marisco": {
+   "origen": 285,
+   "ancho": 3,
+   "alto": 2,
+   "mascara": [
+    "###",
+    "###"
+   ]
+  },
+  "puente": {
+   "origen": 320,
+   "ancho": 1,
+   "alto": 2,
+   "mascara": [
+    ".",
+    "."
+   ]
+  }
+ }
+}
