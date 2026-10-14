@@ -222,3 +222,9 @@ export function maxHP(spec: PokemonSpec): number {
   if (species.baseStats.hp === 1) return 1;
   return Math.floor(((2 * species.baseStats.hp + 31) * spec.nivel) / 100) + spec.nivel + 10;
 }
+
+/** Tipo y categoría de un movimiento (para elegir una animación parecida si no tiene propia). */
+export function moveInfo(id: string): { type: string; category: string } | null {
+  const m = Dex.moves.get(id);
+  return m.exists ? { type: m.type, category: m.category } : null;
+}

@@ -6,7 +6,8 @@ import { loadGame } from '../data/save';
 const SOUNDS = [
   'Battle ball drop', 'Battle ball hit', 'Battle ball shake', 'Battle catch click', 'Battle damage normal',
   'Battle damage super', 'Battle damage weak', 'Battle flee', 'Battle jump to ball', 'Battle recall',
-  'Battle throw', 'Open Pokeball', 'Pokemon Healing', 'EvolutionSuccess', 'Jingle - HMTM',
+  'Battle throw', 'Open Pokeball', 'Pokemon Healing', 'EvolutionSuccess', 'Jingle - HMTM', 'Pkmn exp gain',
+  'Pkmn exp full', 'Pkmn faint', 'Player jump', 'Player bump', 'Door enter', 'Door exit',
 ];
 
 /** Reproduce un sonido de Essentials si está cargado. */
