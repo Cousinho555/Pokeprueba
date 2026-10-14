@@ -689,7 +689,8 @@ def convert_animations(src: Path) -> None:
 
 BATTLE_SE = ["Battle ball drop", "Battle ball hit", "Battle ball shake", "Battle catch click", "Battle damage normal",
              "Battle damage super", "Battle damage weak", "Battle flee", "Battle jump to ball", "Battle recall",
-             "Battle throw", "Open Pokeball"]
+             "Battle throw", "Open Pokeball", "Pkmn exp gain", "Pkmn exp full", "Pkmn faint", "Player jump",
+             "Player bump", "Door enter", "Door exit"]
 BATTLE_ME = ["Pokemon Healing", "EvolutionSuccess", "Jingle - HMTM"]
 # Gráficos de Poké Ball de Essentials (Graphics/Pictures/Battle/ballNN.png) para las que hay en el juego.
 BALL_PICTURES = {"POKEBALL": 0, "GREATBALL": 1, "ULTRABALL": 3}
@@ -710,6 +711,47 @@ def copy_battle_extras(src: Path) -> None:
         for suffix in ("", "_open"):
             if img := find_image(pics, f"ball{n:02d}{suffix}"):
                 shutil.copy(img, out / f"{ball}{suffix}.png")
+    # Gritos de cada especie (Audio/SE/Cries/NNNCry.ogg; sin formas alternativas)
+    cries = src / "Audio" / "SE" / "Cries"
+    if cries.is_dir():
+        (out / "gritos").mkdir(exist_ok=True)
+        for f in cries.iterdir():
+            if m := re.fullmatch(r"(\d+)Cry\.(ogg|wav|mp3)", f.name, re.I):
+                shutil.copy(f, out / "gritos" / f"{int(m.group(1))}.{m.group(2).lower()}")
+
+
+# Animaciones del mapa de Animations.rxdata que usa Essentials (hierba, polvo, "!", "?").
+MAP_ANIMATIONS = {1: "hierba", 2: "polvo", 3: "exclamacion", 4: "pregunta"}
+
+
+def convert_map_animations(src: Path) -> None:
+    """Animaciones de RPG Maker del mapa: celdas por frame [patrón, x, y, zoom, ángulo, espejo, opacidad, mezcla]."""
+    out = OUT / "mapa"
+    out.mkdir(parents=True, exist_ok=True)
+    anims = load(open(src / "Data" / "Animations.rxdata", "rb"))
+    for aid, name in MAP_ANIMATIONS.items():
+        if aid >= len(anims) or anims[aid] is None:
+            continue
+        a = attrs(anims[aid])
+        frames = []
+        for fr in a["@frames"]:
+            f = attrs(fr)
+            t = Table(f["@cell_data"])
+            cells = [[t[i, j] for j in range(8)] for i in range(t.xs)]
+            frames.append([c for c in cells if c[0] >= 0])
+        sounds = []
+        for tm in a["@timings"]:
+            tt = attrs(tm)
+            se = attrs(tt["@se"])
+            if s(se["@name"]) and (f := find_audio(src / "Audio" / "SE", s(se["@name"]))):
+                shutil.copy(f, out / f"{s(se['@name'])}{f.suffix.lower()}")
+                sounds.append([tt["@frame"], f"{s(se['@name'])}{f.suffix.lower()}", se["@volume"]])
+        graphic = s(a["@animation_name"])
+        if img := find_image(src / "Graphics" / "Animations", graphic):
+            shutil.copy(img, out / f"{graphic}.png")
+        (out / f"{name}.json").write_text(json.dumps(
+            {"grafico": f"{graphic}.png", "posicion": a["@position"], "frames": frames, "sonidos": sounds},
+            ensure_ascii=False, separators=(",", ":")))
 
 
 def find_audio(folder: Path, name: str) -> Path | None:
@@ -833,6 +875,7 @@ def main(src: Path) -> None:
             shutil.copy(credits, OUT / "CREDITOS.txt")
             break
     convert_animations(src)
+    convert_map_animations(src)
     copy_battle_extras(src)
     print(f"{len(mapas)} mapas, {len(graficos)} gráficos de personaje -> {OUT}")
 

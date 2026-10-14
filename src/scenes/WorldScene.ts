@@ -8,6 +8,7 @@ import type { DialogData } from './DialogScene';
 import type { BattleData, BattleResult } from './BattleScene';
 import { Character, charKey, DELTA, isDir, REVERSE, TILE, type Dir } from '../world/character';
 import { FRAME_MS, Interpreter, runRoute, type EventHost, type Pagina } from '../world/interpreter';
+import { MapAnimations } from '../world/mapAnimations';
 
 const BIT: Record<Dir, number> = { 2: 1, 4: 2, 6: 4, 8: 8 };
 
@@ -64,6 +65,8 @@ export class WorldScene extends Phaser.Scene implements EventHost {
   private leaving = false;
   private lastUnlock = 0;
   private toneRect?: Phaser.GameObjects.Rectangle;
+  private mapAnims!: MapAnimations;
+  private lastBump = 0;
 
   constructor() {
     super('World');
@@ -122,6 +125,7 @@ export class WorldScene extends Phaser.Scene implements EventHost {
     this.pasos = props.pasos ?? '';
     this.terreno = props.terreno ?? '';
 
+    this.mapAnims = new MapAnimations(this);
     this.player = new Character(this, this.startPos.x, this.startPos.y, this.startPos.dir);
     this.player.depthBias = 0.5;
     this.player.setGraphic(mundo.jugador);
@@ -288,7 +292,10 @@ export class WorldScene extends Phaser.Scene implements EventHost {
       return;
     }
     if (dir === 2 && this.terrainAt(nx, ny) === TERRAIN_LEDGE && !this.eventsAt(nx, ny).some((e) => e.ch.solid)) {
-      void p.jump(0, 2);
+      // Salto del bordillo: sonido al saltar y polvo al caer.
+      sfx(this, 'Player jump');
+      p.turn(2);
+      void p.jump(0, 2).then(() => this.mapAnims.playAtTile('polvo', p.x, p.y, p.y + 1.7));
       return;
     }
     if (this.canMove(p, dir)) {
@@ -296,6 +303,10 @@ export class WorldScene extends Phaser.Scene implements EventHost {
       return;
     }
     p.turn(dir);
+    if (!this.eventsAt(nx, ny).length && this.time.now - this.lastBump > 450) {
+      this.lastBump = this.time.now;
+      sfx(this, 'Player bump', 0.5);
+    }
     // Como en RMXP: chocar con un evento de contacto lo activa (puertas, salidas sobre muros).
     this.touch(nx, ny);
   }
@@ -366,6 +377,11 @@ export class WorldScene extends Phaser.Scene implements EventHost {
   }
 
   moved(ch: Character): void {
+    // La hierba se mueve al pisarla (también cuando la pisa un NPC).
+    const t = this.terrainAt(ch.x, ch.y);
+    if (ch.sprite && (t === TERRAIN_GRASS || t === TERRAIN_TALL_GRASS)) {
+      void this.mapAnims.playAtTile('hierba', ch.x, ch.y, ch.y + 1.7);
+    }
     if (ch === this.player) this.onStep();
   }
 
@@ -555,11 +571,8 @@ export class WorldScene extends Phaser.Scene implements EventHost {
   exclaim(ch: Character): Promise<void> {
     const sprite = ch.sprite;
     if (!sprite) return Promise.resolve();
-    const mark = this.add
-      .text(sprite.x, sprite.y - sprite.height - 4, '!', { ...textStyle(28, '#e03030'), stroke: '#ffffff', strokeThickness: 4 })
-      .setOrigin(0.5, 1)
-      .setDepth(20000);
-    return this.wait(700).then(() => void mark.destroy());
+    // Bocadillo "!" de Essentials sobre la cabeza.
+    return this.mapAnims.play('exclamacion', sprite.x, sprite.y, sprite.y - sprite.height, 20000).then(() => this.wait(150));
   }
 
   setRespawn(): void {
@@ -634,16 +647,14 @@ export class WorldScene extends Phaser.Scene implements EventHost {
 
   private startBattle(foes: PokemonSpec[], trainer?: Entrenador): Promise<BattleResult> {
     this.locks++;
-    const cam = this.cameras.main;
-    cam.flash(250, 255, 255, 255);
-    this.time.delayedCall(300, () => cam.flash(250, 255, 255, 255));
     return new Promise((resolve) => {
-      this.time.delayedCall(650, () => {
+      void this.battleTransition().then((bars) => {
         const data: BattleData = {
           foes,
           trainer,
           background: this.info.fondoCombate,
           onEnd: (result) => {
+            bars.destroy();
             this.scene.resume();
             this.unlock();
             if (result === 'lose') {
@@ -660,6 +671,33 @@ export class WorldScene extends Phaser.Scene implements EventHost {
         this.scene.launch('Battle', data);
       });
     });
+  }
+
+  /**
+   * Transición al combate: dos destellos y la pantalla se cierra con franjas negras
+   * que entran alternando desde cada lado. Devuelve las franjas para quitarlas al volver.
+   */
+  private async battleTransition(): Promise<Phaser.GameObjects.Container> {
+    const cam = this.cameras.main;
+    cam.flash(200, 255, 255, 255);
+    await this.wait(260);
+    cam.flash(200, 255, 255, 255);
+    await this.wait(300);
+    const { width, height } = this.scale;
+    const rows = 8;
+    const h = Math.ceil(height / rows);
+    const bars = this.add.container(0, 0).setScrollFactor(0).setDepth(30000);
+    await Promise.all(
+      Array.from({ length: rows }, (_, k) => {
+        const fromLeft = k % 2 === 0;
+        const bar = this.add.rectangle(fromLeft ? -width : width, k * h, width, h, 0x000000).setOrigin(0);
+        bars.add(bar);
+        return new Promise<void>((r) =>
+          this.tweens.add({ targets: bar, x: 0, duration: 380, delay: k * 35, ease: 'Quad.easeIn', onComplete: () => r() }),
+        );
+      }),
+    );
+    return bars;
   }
 
   /** Como en Essentials: vuelves al último Centro Pokémon (o a casa) con el equipo curado. */

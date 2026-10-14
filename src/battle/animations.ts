@@ -204,9 +204,34 @@ export class AnimationPlayer {
       }
     };
 
-    const showFrame = (frame: number) => {
+    // Celdas de un frame por índice, para interpolar con el siguiente.
+    const byIndex = data.frames.map((cells) => new Map(cells.map((c) => [c[K], c])));
+    const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+    const lerpAngle = (a: number, b: number, t: number) => {
+      let d = ((b - a) % 360 + 540) % 360 - 180;
+      if (Math.abs(d) > 90) d = 0; // giros bruscos: sin interpolar
+      return a + d * t;
+    };
+    /**
+     * Mezcla una celda con la del frame siguiente (misma celda, mismo dibujo y foco) para que
+     * la animación vaya fluida a la velocidad de la pantalla, no a saltos de 20 fps.
+     * Los saltos grandes (proyectiles que reaparecen) se dejan tal cual.
+     */
+    const blend = (cell: Cell, next: Cell | undefined, t: number): Cell => {
+      if (!next || t <= 0 || next[PATTERN] !== cell[PATTERN] || next[FOCUS] !== cell[FOCUS] ||
+        next[VISIBLE] !== cell[VISIBLE] || next[MIRROR] !== cell[MIRROR]) return cell;
+      if (Math.hypot(next[X] - cell[X], next[Y] - cell[Y]) > 96) return cell;
+      const out = [...cell];
+      for (const i of [X, Y, ZX, ZY, OPACITY]) out[i] = lerp(cell[i], next[i], t);
+      out[ANGLE] = lerpAngle(cell[ANGLE], next[ANGLE], t);
+      return out;
+    };
+
+    const showFrame = (frame: number, t: number) => {
       pool.forEach((s) => s.setVisible(false));
-      for (const cell of data.frames[frame]) {
+      const next = byIndex[frame + 1];
+      for (const raw of data.frames[frame]) {
+        const cell = blend(raw, next?.get(raw[K]), t);
         const k = cell[K];
         const actor = k === 0 ? user : k === 1 ? target : undefined;
         if (k <= 1 && !actor) continue;
@@ -259,30 +284,35 @@ export class AnimationPlayer {
                 : 35,
         );
       }
-      timing(frame);
     };
 
     return new Promise((resolve) => {
-      let frame = 0;
-      showFrame(0);
-      scene.time.addEvent({
-        delay: FRAME_MS,
-        repeat: data.frames.length - 1,
-        callback: () => {
-          frame++;
-          if (frame < data.frames.length) return showFrame(frame);
-          pool.forEach((s) => s.destroy());
-          for (const pl of [bg, fg]) {
-            pl.rect.destroy();
-            pl.img?.destroy();
-          }
-          actors.forEach((a, i) => {
-            const s = saved[i];
-            if (a && s) a.sprite.setPosition(s.x, s.y).setAlpha(s.alpha).setAngle(s.angle).setFlipX(s.flipX).setVisible(s.visible).setScale(s.scaleX, s.scaleY);
-          });
-          resolve();
-        },
-      });
+      // Se dibuja en cada fotograma de la pantalla; sonidos y fondos van con los frames de 50 ms.
+      let start = -1;
+      let lastFrame = -1;
+      const finish = () => {
+        scene.events.off(Phaser.Scenes.Events.UPDATE, tick);
+        pool.forEach((s) => s.destroy());
+        for (const pl of [bg, fg]) {
+          pl.rect.destroy();
+          pl.img?.destroy();
+        }
+        actors.forEach((a, i) => {
+          const s = saved[i];
+          if (a && s) a.sprite.setPosition(s.x, s.y).setAlpha(s.alpha).setAngle(s.angle).setFlipX(s.flipX).setVisible(s.visible).setScale(s.scaleX, s.scaleY);
+        });
+        resolve();
+      };
+      const tick = (time: number) => {
+        if (start < 0) start = time;
+        const pos = (time - start) / FRAME_MS;
+        const frame = Math.floor(pos);
+        if (frame >= data.frames.length) return finish();
+        while (lastFrame < frame) timing(++lastFrame);
+        showFrame(frame, pos - frame);
+      };
+      scene.events.on(Phaser.Scenes.Events.UPDATE, tick);
+      tick(scene.time.now);
     });
   }
 }

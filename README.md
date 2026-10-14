@@ -44,6 +44,7 @@ src/
     character.ts       personajes del mapa (jugador y eventos): pasos, saltos, gráficos
     interpreter.ts     intérprete de eventos de RPG Maker XP y scripts de Essentials
     text.ts            códigos de los mensajes (\PN, \v[n], colores)
+    mapAnimations.ts   animaciones del mapa de Essentials (hierba, polvo, "!")
   battle/
     engine.ts          envoltorio de @pkmn/sim (jugador vs IA)
     protocol.ts        traduce el protocolo de Showdown a eventos y textos en español
@@ -91,4 +92,4 @@ Pokémon Essentials BES se distribuye bajo **CC BY-NC-SA 4.0**: este proyecto de
 4. **Mundo**: intérprete de eventos de RPG Maker XP (hecho): la historia se crea en el editor de eventos de Essentials. Pendiente: música, imágenes y más scripts de Essentials según se vayan necesitando.
 5. **Supabase**: inicio de sesión, guardado en la nube, Pokédex.
 6. **Online**: combates entre jugadores (Supabase Realtime + validación con el simulador) e intercambios.
-7. **Pulido**: animaciones de ataques y estados de Essentials, lanzamiento de Poké Ball y efectos de sonido de combate (hecho). Pendiente: música de fondo, menús, móvil/táctil.
+7. **Pulido**: animaciones de ataques y estados de Essentials (fluidas, con golpe, clima y ataques de dos turnos), transición y entrada al combate, sacar Pokémon con grito, barras de PS y experiencia animadas, debilitarse, lanzamiento de Poké Ball, hierba, polvo y bocadillos en el mapa (hecho). Pendiente: música de fondo, menús, móvil/táctil.
