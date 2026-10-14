@@ -1,10 +1,11 @@
 import Phaser from 'phaser';
 import { ESS, encounterChance, mundo, objetos, rollEncounter, trainerTeam, type Entrenador, type InfoMapa, type PokemonSpec } from '../data/essentials';
-import { addItem, bag, BALLS, healParty, party, partyCanFight, pc, progress } from '../data/party';
+import { addItem, healParty, partyCanFight, pc, progress } from '../data/party';
 import { saveGame } from '../data/save';
 import { sfx } from './BootScene';
 import { textStyle } from '../ui';
 import type { DialogData } from './DialogScene';
+import type { MenuData } from './MenuScene';
 import type { BattleData, BattleResult } from './BattleScene';
 import { Character, charKey, DELTA, isDir, REVERSE, TILE, type Dir } from '../world/character';
 import { FRAME_MS, Interpreter, runRoute, type EventHost, type Pagina } from '../world/interpreter';
@@ -147,8 +148,8 @@ export class WorldScene extends Phaser.Scene implements EventHost {
     kb.on('keydown-Z', () => this.interact());
     kb.on('keydown-ENTER', () => this.interact());
     kb.on('keydown-SPACE', () => this.interact());
-    kb.on('keydown-X', () => this.showParty());
-    kb.on('keydown-ESC', () => this.showParty());
+    kb.on('keydown-X', () => this.openMenu());
+    kb.on('keydown-ESC', () => this.openMenu());
     this.events.off(Phaser.Scenes.Events.RESUME).on(Phaser.Scenes.Events.RESUME, () => kb.resetKeys());
 
     if (this.info.exterior) this.showMapName();
@@ -614,15 +615,12 @@ export class WorldScene extends Phaser.Scene implements EventHost {
 
   // ------------------------------------------------------------- menús
 
-  /** Resumen del equipo y la mochila (X o Esc), a falta de un menú de pausa completo. */
-  private showParty(): void {
-    if (this.busy || this.player.moving) return;
-    const rows = party.map(({ spec, hp }) => `${spec.nombre}  Nv.${spec.nivel}  ${hp === 0 ? '(debilitado)' : hp == null ? 'PS al máximo' : `PS ${hp}`}`);
-    const pages: string[] = [];
-    for (let i = 0; i < rows.length; i += 2) pages.push(rows.slice(i, i + 2).join('\n'));
-    const items = Object.keys(bag).map((b) => `${BALLS[b]?.nombre ?? objetos[b]?.nombre ?? b} x${bag[b]}`);
-    pages.push(`Dinero: ${progress.dinero} ₽. Mochila: ${items.join(', ') || 'vacía'}.` + (pc.length ? ` PC: ${pc.length} Pokémon.` : ''));
-    this.say(pages);
+  /** Menú de pausa (Esc o X): Pokédex, equipo, mochila, monedero y guardar. */
+  private openMenu(): void {
+    if (this.busy || this.player.moving || this.time.now - this.lastUnlock < 150) return;
+    this.locks++;
+    const data: MenuData = { onSave: () => saveGame(this.position()), onClose: () => this.unlock() };
+    this.scene.launch('Menu', data);
   }
 
   private say(lines: string[], onClose?: () => void): void {
