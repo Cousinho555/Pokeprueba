@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
-import { ESS, encounterChance, mundo, rollEncounter, type InfoMapa } from '../data/essentials';
-import { bag, BALLS, healParty, party, partyCanFight, pc } from '../data/party';
+import { ESS, encounterChance, mundo, rollEncounter, trainerTeam, type Entrenador, type InfoMapa, type PokemonSpec } from '../data/essentials';
+import { bag, BALLS, healParty, party, partyCanFight, pc, progress } from '../data/party';
 import { saveGame } from '../data/save';
+import { sfx } from './BootScene';
 import { textStyle } from '../ui';
 import type { DialogData } from './DialogScene';
 import type { BattleData, BattleResult } from './BattleScene';
@@ -29,7 +30,10 @@ export interface WorldData {
 }
 
 interface MapEvent {
+  /** Identificador estable para recordar si ya se le ha vencido. */
+  key: string;
   name: string;
+  dir: Dir;
   x: number;
   y: number;
   sprite?: Phaser.GameObjects.Sprite;
@@ -37,6 +41,9 @@ interface MapEvent {
   trigger: number;
   text?: string[];
   warp?: { mapa: number; x: number; y: number; dir: number };
+  trainer?: Entrenador;
+  /** Enfermera del Centro Pokémon. */
+  heals?: boolean;
 }
 
 const mapKey = (id: number) => `map${id}`;
@@ -130,29 +137,34 @@ export class WorldScene extends Phaser.Scene {
     if (this.info.exterior) this.showMapName();
     saveGame({ mapId: this.mapId, x: this.tileX, y: this.tileY, dir: this.facing });
     const lines = [...(data.say ?? [])];
-    if (this.info.nombre.includes('Centro Pokémon') || this.mapId === mundo.inicio.mapa) {
-      healParty();
+    if (this.mapId === mundo.inicio.mapa) healParty();
+    if (lines.length) this.say(lines, () => this.checkTrainers());
+    else {
+      this.busy = false;
+      this.checkTrainers();
     }
-    if (lines.length) this.say(lines);
-    else this.busy = false;
   }
 
   private addEvent(obj: Phaser.Types.Tilemaps.TiledObject): void {
     const p = Object.fromEntries(((obj.properties ?? []) as { name: string; value: string }[]).map((x) => [x.name, x.value]));
     const x = Math.floor(obj.x! / TILE);
     const y = Math.floor(obj.y! / TILE);
+    const dir = Number(p.direccion ?? 2) as Dir;
     const ev: MapEvent = {
+      key: `${this.mapId}:${x}:${y}:${obj.name}`,
       name: obj.name,
+      dir: ([2, 4, 6, 8].includes(dir) ? dir : 2) as Dir,
       x,
       y,
       blocks: false,
       trigger: Number(p.disparo ?? 0),
       text: p.texto ? JSON.parse(p.texto) : undefined,
       warp: p.warp ? JSON.parse(p.warp) : undefined,
+      trainer: p.entrenador ? JSON.parse(p.entrenador) : undefined,
+      heals: p.cura === 'true',
     };
     const g = p.grafico;
     if (g && this.textures.exists(charKey(g))) {
-      const dir = Number(p.direccion ?? 2) as Dir;
       const frame = (ROW[dir] ?? 0) * 4 + Number(p.patron ?? 0);
       ev.sprite = this.add
         .sprite(x * TILE + TILE / 2, (y + 1) * TILE, charKey(g), frame)
@@ -273,6 +285,7 @@ export class WorldScene extends Phaser.Scene {
   private onStep(): void {
     const ev = this.eventAt(this.tileX, this.tileY);
     if (ev?.warp && ev.trigger !== 0) return this.warp(ev.warp);
+    if (this.checkTrainers()) return;
     const t = this.terrainAt(this.tileX, this.tileY);
     if ((t === TERRAIN_GRASS || t === TERRAIN_TALL_GRASS) && Math.random() < encounterChance(this.mapId)) {
       this.startWildBattle();
@@ -332,14 +345,106 @@ export class WorldScene extends Phaser.Scene {
   private interact(): void {
     if (this.busy || this.moving) return;
     const [dx, dy] = DELTA[this.facing];
-    const ev = this.eventAt(this.tileX + dx, this.tileY + dy);
+    // Por encima de un mostrador (casilla que no se puede pisar) se habla con quien está detrás.
+    const ev =
+      this.eventAt(this.tileX + dx, this.tileY + dy) ??
+      (this.passable(this.tileX + dx, this.tileY + dy, REVERSE[this.facing]) ? undefined : this.eventAt(this.tileX + 2 * dx, this.tileY + 2 * dy));
     if (!ev) return;
     if (ev.sprite && ev.blocks && !ev.warp) {
       // El personaje se gira hacia el jugador.
       ev.sprite.setFrame(ROW[REVERSE[this.facing]] * 4);
     }
-    if (ev.text) this.say(ev.text);
+    if (ev.trainer) this.talkToTrainer(ev);
+    else if (ev.heals) this.nurse(ev);
+    else if (ev.text) this.say(ev.text);
     else if (ev.warp && ev.trigger === 0) this.warp(ev.warp);
+  }
+
+  // ------------------------------------------------------------- Centro Pokémon
+
+  private nurse(ev: MapEvent): void {
+    const intro = ev.text ?? ['¡Hola! Bienvenido al Centro Pokémon.'];
+    this.say(intro, () => {
+      this.busy = true;
+      healParty();
+      sfx(this, 'Pokemon Healing');
+      // Si pierdes un combate, vuelves aquí.
+      progress.regreso = { mapId: this.mapId, x: this.tileX, y: this.tileY, dir: this.facing };
+      const cam = this.cameras.main;
+      cam.flash(300, 255, 255, 255);
+      this.time.delayedCall(400, () => cam.flash(300, 255, 255, 255));
+      this.time.delayedCall(2400, () => {
+        saveGame({ mapId: this.mapId, x: this.tileX, y: this.tileY, dir: this.facing });
+        this.say(['Gracias por esperar.', 'Tu equipo Pokémon ha recuperado toda su energía.', '¡Esperamos volver a verte!']);
+      });
+    });
+  }
+
+  // ------------------------------------------------------------- entrenadores
+
+  private beaten(ev: MapEvent): boolean {
+    return progress.vencidos.includes(ev.key);
+  }
+
+  private talkToTrainer(ev: MapEvent): void {
+    const t = ev.trainer!;
+    if (this.beaten(ev)) return this.say(t.despues.length ? t.despues : [t.derrota || '...']);
+    if (!partyCanFight()) return this.say(['Tus Pokémon no están en condiciones de luchar.']);
+    this.say(t.intro.length ? t.intro : ['¡Vamos a luchar!'], () => this.startBattle(trainerTeam(t), ev));
+  }
+
+  /** ¿Algún entrenador no vencido te ve? Si es así, viene hacia ti y empieza el combate. */
+  private checkTrainers(): boolean {
+    if (!partyCanFight()) return false;
+    for (const ev of this.mapEvents) {
+      const t = ev.trainer;
+      if (!t || !t.vision || !ev.sprite || this.beaten(ev)) continue;
+      const [dx, dy] = DELTA[ev.dir];
+      for (let k = 1; k <= t.vision; k++) {
+        const x = ev.x + dx * k;
+        const y = ev.y + dy * k;
+        if (x === this.tileX && y === this.tileY) {
+          this.trainerSpotted(ev, k - 1);
+          return true;
+        }
+        if (this.eventAt(x, y)?.blocks) break;
+      }
+    }
+    return false;
+  }
+
+  private trainerSpotted(ev: MapEvent, steps: number): void {
+    this.busy = true;
+    const sprite = ev.sprite!;
+    const mark = this.add
+      .text(sprite.x, sprite.y - sprite.height - 4, '!', { ...textStyle(28, '#e03030'), stroke: '#ffffff', strokeThickness: 4 })
+      .setOrigin(0.5, 1)
+      .setDepth(20000);
+    this.time.delayedCall(700, () => {
+      mark.destroy();
+      const [dx, dy] = DELTA[ev.dir];
+      const walk = (left: number) => {
+        if (left <= 0) {
+          this.facing = REVERSE[ev.dir];
+          this.player.setFrame(ROW[this.facing] * 4);
+          return this.talkToTrainer(ev);
+        }
+        ev.x += dx;
+        ev.y += dy;
+        sprite.setFrame(ROW[ev.dir] * 4 + 1 + (left % 2) * 2);
+        this.tweens.add({
+          targets: sprite,
+          x: ev.x * TILE + TILE / 2,
+          y: (ev.y + 1) * TILE,
+          duration: STEP_MS,
+          onComplete: () => {
+            sprite.setFrame(ROW[ev.dir] * 4).setDepth(ev.y);
+            walk(left - 1);
+          },
+        });
+      };
+      walk(steps);
+    });
   }
 
   /** Resumen del equipo y la mochila (X o Esc), a falta de un menú de pausa completo. */
@@ -349,7 +454,7 @@ export class WorldScene extends Phaser.Scene {
     const pages: string[] = [];
     for (let i = 0; i < rows.length; i += 2) pages.push(rows.slice(i, i + 2).join('\n'));
     const balls = Object.keys(BALLS).filter((b) => bag[b]).map((b) => `${BALLS[b].nombre} x${bag[b]}`);
-    pages.push(`Mochila: ${balls.join(', ') || 'vacía'}.` + (pc.length ? `\nPC: ${pc.length} Pokémon.` : ''));
+    pages.push(`Dinero: ${progress.dinero} ₽. Mochila: ${balls.join(', ') || 'vacía'}.` + (pc.length ? ` PC: ${pc.length} Pokémon.` : ''));
     this.say(pages);
   }
 
@@ -371,32 +476,44 @@ export class WorldScene extends Phaser.Scene {
   private startWildBattle(): void {
     const foe = rollEncounter(this.mapId);
     if (!foe || !partyCanFight()) return;
+    this.startBattle([foe]);
+  }
+
+  private startBattle(foes: PokemonSpec[], trainerEvent?: MapEvent): void {
     this.busy = true;
     const cam = this.cameras.main;
     cam.flash(250, 255, 255, 255);
     this.time.delayedCall(300, () => cam.flash(250, 255, 255, 255));
     this.time.delayedCall(650, () => {
       const data: BattleData = {
-        foe,
+        foes,
+        trainer: trainerEvent?.trainer,
         background: this.info.fondoCombate,
-        onEnd: (result) => this.afterBattle(result),
+        onEnd: (result) => this.afterBattle(result, trainerEvent),
       };
       this.scene.pause();
       this.scene.launch('Battle', data);
     });
   }
 
-  private afterBattle(result: BattleResult): void {
+  private afterBattle(result: BattleResult, trainerEvent?: MapEvent): void {
     this.scene.resume();
     this.busy = false;
-    saveGame();
+    if (result === 'win' && trainerEvent) progress.vencidos.push(trainerEvent.key);
     if (result === 'lose') {
-      const { mapa, x, y, dir } = mundo.inicio;
+      // Como en Essentials: vuelves al último Centro Pokémon (o a casa) con el equipo curado.
+      healParty();
+      const back = progress.regreso;
+      const to = back ? { mapa: back.mapId, x: back.x, y: back.y, dir: back.dir } : mundo.inicio;
+      saveGame({ mapId: to.mapa, x: to.x, y: to.y, dir: to.dir });
       this.busy = true;
-      this.warp({ mapa, x, y, dir }, [
+      this.warp(to, [
         '¡No te quedan Pokémon en condiciones de luchar!',
-        'Vuelves corriendo a casa y tu equipo se recupera.',
+        back ? 'Vuelves corriendo al Centro Pokémon y tu equipo se recupera.' : 'Vuelves corriendo a casa y tu equipo se recupera.',
       ]);
+      return;
     }
+    saveGame();
+    this.checkTrainers();
   }
 }

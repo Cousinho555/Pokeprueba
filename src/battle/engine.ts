@@ -68,9 +68,9 @@ export class BattleEngine {
   private cursor = 0;
   private translator: ProtocolTranslator;
 
-  constructor(player: Combatant[], foe: Combatant[], opts: { wild: boolean; playerName?: string }) {
+  constructor(player: Combatant[], foe: Combatant[], opts: { wild: boolean; playerName?: string; foeName?: string }) {
     const playerName = opts.playerName ?? 'Jugador';
-    this.translator = new ProtocolTranslator(playerName, opts.wild, moveName);
+    this.translator = new ProtocolTranslator(playerName, opts.wild, moveName, opts.foeName);
     this.battle = new Battle({ formatid: 'gen9customgame' as never }, dex);
     const withBall = (set: PokemonSet) => ({ ...set, moves: [...set.moves, BALL_MOVE] });
     this.battle.setPlayer('p1', { name: playerName, team: player.map((c) => withBall(toSet(c.spec))) });
@@ -150,6 +150,16 @@ export class BattleEngine {
     let shakes = 0;
     while (shakes < 4 && Math.random() * 65536 < b) shakes++;
     return shakes;
+  }
+
+  /** Índice (en el equipo rival) del Pokémon activo del rival. */
+  foeIndex(): number {
+    return this.battle.p2.pokemon.findIndex((p) => p.isActive);
+  }
+
+  /** PS máximos en combate de cada Pokémon del jugador. */
+  playerMaxHP(): number[] {
+    return this.battle.p1.pokemon.map((p) => p.maxhp);
   }
 
   /** PS actuales del rival activo. */

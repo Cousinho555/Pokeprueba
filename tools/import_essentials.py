@@ -140,26 +140,100 @@ def clean_text(t: str) -> str:
     return " ".join(t.split())
 
 
-def event_info(ev) -> dict | None:
-    e = attrs(ev)
-    page = attrs(e["@pages"][0])
-    g = attrs(page["@graphic"])
-    cmds = [(attrs(c)["@code"], attrs(c)["@parameters"]) for c in page["@list"]]
-    info: dict = {"id": e["@id"], "nombre": s(e["@name"]), "x": e["@x"], "y": e["@y"],
-                  "grafico": s(g["@character_name"]), "direccion": g["@direction"],
-                  "patron": g["@pattern"], "atraviesa": bool(page["@through"]),
-                  "disparo": page["@trigger"]}
+def page_commands(page) -> list[tuple[int, list]]:
+    return [(attrs(c)["@code"], attrs(c)["@parameters"]) for c in attrs(page)["@list"]]
+
+
+def page_texts(cmds, stop=lambda code, params: False) -> list[str]:
+    """Mensajes (101 + 401) de una página, hasta que `stop` diga basta."""
     texts: list[str] = []
     for code, params in cmds:
-        if code in (102, 111, 402, 403):  # elecciones y condiciones: cortamos ahí
+        if stop(code, params):
             break
         if code == 101:
             texts.append(s(params[0]))
         elif code == 401 and texts:
             texts[-1] += " " + s(params[0])
-        elif code == 201 and params[0] == 0:
+    return [t for t in (clean_text(t) for t in texts) if t]
+
+
+def script_of(code: int, params) -> str | None:
+    """Texto de Ruby de un comando de script (355/655) o de una condición de script (111)."""
+    if code in (355, 655):
+        return s(params[0])
+    if code == 111 and params[0] == 12:
+        return s(params[1])
+    return None
+
+
+TRAINER_BATTLE = re.compile(
+    r'pbTrainerBattle\(PBTrainers::(\w+),\s*"([^"]*)",\s*_I\("((?:[^"\\]|\\.)*)"\)(?:,\s*(?:true|false))?(?:,\s*(\d+))?')
+CUSTOM_MON = re.compile(r"createPokemon\(:(\w+),\s*(\d+)(?:,\s*\[([^\]]*)\])?")
+CUSTOM_TRAINER = re.compile(r'createTrainer\(:(\w+),\s*"([^"]*)"')
+CUSTOM_DEFEAT = re.compile(r'customTrainerBattle\([^,]*,\s*_I\("((?:[^"\\]|\\.)*)"\)')
+
+
+def trainer_info(cmds, after_cmds) -> dict | None:
+    """Entrenador de un evento: equipo, clase, frase de derrota y textos de antes y después."""
+    lines, battle_at = [], None
+    for i, (code, params) in enumerate(cmds):
+        sc = script_of(code, params)
+        if sc is None:
+            continue
+        lines.append(sc)
+        if battle_at is None and ("pbTrainerBattle(" in sc or "customTrainerBattle(" in " ".join(lines)):
+            battle_at = i
+    script = " ".join(lines)
+    team = None
+    if m := TRAINER_BATTLE.search(script):
+        ttype, name, defeat, party_id = m.group(1), m.group(2), m.group(3), int(m.group(4) or 0)
+        team = TRAINERS.get((ttype, name, party_id)) or TRAINERS.get((ttype, name, 0))
+    elif (t := CUSTOM_TRAINER.search(script)) and (d := CUSTOM_DEFEAT.search(script)):
+        ttype, name, defeat = t.group(1), t.group(2), d.group(1)
+        team = [[sp, int(lv), [x.strip().lstrip(":") for x in mv.split(",") if x.strip()] if mv else []]
+                for sp, lv, mv in CUSTOM_MON.findall(script)]
+    if not team or ttype not in TRAINER_TYPES:
+        return None
+    tt = TRAINER_TYPES[ttype]
+    first_script = next(i for i, (c, p) in enumerate(cmds) if script_of(c, p) is not None and
+                        ("pbTrainerBattle(" in script_of(c, p) or "party" in script_of(c, p) or "createPokemon" in script_of(c, p)))
+    intro = page_texts(cmds[:first_script], lambda c, p: c in (102, 402, 403))
+    return {"clase": tt["nombre"], "nombre": name, "sprite": tt["id"], "dinero": tt["dinero"],
+            "derrota": clean_text(defeat.replace("\\", "")), "equipo": team, "intro": intro,
+            "despues": page_texts(after_cmds, lambda c, p: c in (102, 111, 402, 403)) if after_cmds else []}
+
+
+def event_info(ev) -> dict | None:
+    e = attrs(ev)
+    pages = e["@pages"]
+    page = attrs(pages[0])
+    g = attrs(page["@graphic"])
+    cmds = page_commands(pages[0])
+    info: dict = {"id": e["@id"], "nombre": s(e["@name"]), "x": e["@x"], "y": e["@y"],
+                  "grafico": s(g["@character_name"]), "direccion": g["@direction"],
+                  "patron": g["@pattern"], "atraviesa": bool(page["@through"]),
+                  "disparo": page["@trigger"]}
+    for code, params in cmds:
+        if code in (102, 111, 402, 403):  # elecciones y condiciones: cortamos ahí
+            break
+        if code == 201 and params[0] == 0:
             info["warp"] = {"mapa": params[1], "x": params[2], "y": params[3], "dir": params[4]}
-    texts = [t for t in (clean_text(t) for t in texts) if t]
+    texts = page_texts(cmds, lambda c, p: c in (102, 111, 402, 403))
+
+    # Enfermera del Centro Pokémon: cura al equipo (314) y fija el punto de regreso.
+    if any(code == 314 for code, _ in cmds):
+        info["cura"] = True
+        texts = [t for t in texts if not t.endswith("?")]
+    # Entrenadores: los que combaten al verte se llaman "Trainer(alcance)".
+    if info["grafico"]:
+        after = page_commands(pages[1]) if len(pages) > 1 else None
+        tr = trainer_info(cmds, after)
+        if tr:
+            m = re.match(r"Trainer\((\d+)\)", info["nombre"])
+            tr["vision"] = int(m.group(1)) if m and info["disparo"] == 2 else 0
+            info["entrenador"] = tr
+            texts = []
+
     if texts:
         info["texto"] = texts
     if not info["grafico"] and "warp" not in info and not texts:
@@ -260,7 +334,8 @@ def convert_map(map_id: int, name: str, data_dir: Path, tilesets: dict, out_maps
     (out_maps / f"map{map_id:03d}.tmj").write_text(json.dumps(tmj, ensure_ascii=False, separators=(",", ":")))
     return {"id": map_id, "nombre": name, "ancho": w, "alto": h, "tileset": ts_id,
             "autotiles": ts["autotile_key"], "imagen": ts["file"], "bgm": s(attrs(m["@bgm"])["@name"]),
-            "graficos": sorted({e["grafico"] for e in events if e["grafico"]})}
+            "graficos": sorted({e["grafico"] for e in events if e["grafico"]}),
+            "entrenadores": [e["entrenador"]["sprite"] for e in events if "entrenador" in e]}
 
 
 # ------------------------------------------------------------------ PBS
@@ -357,11 +432,247 @@ def read_connections(pbs: Path) -> list:
     return out
 
 
+TRAINERS: dict = {}
+TRAINER_TYPES: dict = {}
+
+
+def read_trainer_types(pbs: Path) -> dict:
+    types = {}
+    for line in (pbs / "trainertypes.txt").read_text(encoding="utf-8-sig").splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        f = line.split(",")
+        types[f[1]] = {"id": int(f[0]), "nombre": f[2], "dinero": int(f[3] or 30)}
+    return types
+
+
+def read_trainers(pbs: Path) -> dict:
+    """trainers.txt: tipo / nombre[,versión] / nº de Pokémon[,objetos] / una línea por Pokémon."""
+    lines = [l.strip() for l in (pbs / "trainers.txt").read_text(encoding="utf-8-sig").splitlines()
+             if l.strip() and not l.startswith("#")]
+    out, i = {}, 0
+    while i + 2 < len(lines):
+        ttype = lines[i]
+        name, _, ver = lines[i + 1].partition(",")
+        count = int(lines[i + 2].split(",")[0])
+        team = []
+        for row in lines[i + 3:i + 3 + count]:
+            f = row.split(",")
+            team.append([f[0], int(f[1]), [m for m in f[3:7] if m]])
+        out[(ttype, name, int(ver or 0))] = team
+        i += 3 + count
+    return out
+
+
 def read_metadata(pbs: Path) -> dict:
     meta = {}
     for sec in read_pbs_sections(pbs / "metadata.txt"):
         meta[int(sec["_id"])] = {k: v for k, v in sec.items() if k != "_id"}
     return meta
+
+
+# ------------------------------------------------------------------ animaciones
+
+class MiniMarshal:
+    """Lector mínimo de Marshal de Ruby para PkmnAnimations.rxdata, que usa subclases
+    de Array (token "C") que rubymarshal no entiende. Devuelve listas, dicts y
+    diccionarios {"_class": nombre, "@atributo": valor} para los objetos."""
+
+    def __init__(self, data: bytes):
+        self.d, self.i, self.syms, self.objs = data, 2, [], []
+
+    def byte(self) -> int:
+        self.i += 1
+        return self.d[self.i - 1]
+
+    def long(self) -> int:
+        c = self.byte()
+        c = c - 256 if c > 127 else c
+        if c == 0:
+            return 0
+        if 5 < c < 128:
+            return c - 5
+        if -129 < c < -5:
+            return c + 5
+        n = 0
+        for k in range(abs(c)):
+            n |= self.byte() << (8 * k)
+        return n if c > 0 else n - (1 << (8 * -c))
+
+    def blob(self) -> bytes:
+        n = self.long()
+        self.i += n
+        return self.d[self.i - n:self.i]
+
+    def sym(self) -> str:
+        t = chr(self.byte())
+        if t == ";":
+            return self.syms[self.long()]
+        name = self.blob().decode("utf-8", "replace")
+        self.syms.append(name)
+        return name
+
+    def keep(self, obj):
+        self.objs.append(obj)
+        return obj
+
+    def read(self):
+        t = chr(self.byte())
+        if t == "0":
+            return None
+        if t == "T":
+            return True
+        if t == "F":
+            return False
+        if t == "i":
+            return self.long()
+        if t in ":;":
+            self.i -= 1
+            return self.sym()
+        if t == "@":
+            return self.objs[self.long()]
+        if t == "I":
+            obj = self.read()
+            for _ in range(self.long()):
+                k, v = self.sym(), self.read()
+                if isinstance(obj, dict) and "_class" in obj:
+                    obj[k] = v
+            return obj
+        if t == '"':
+            return self.keep(self.blob().decode("utf-8", "replace"))
+        if t == "f":
+            return self.keep(float(self.blob().split(b"\0")[0]))
+        if t == "l":
+            sign = self.byte()
+            size = 2 * self.long()
+            n = int.from_bytes(self.d[self.i:self.i + size], "little")
+            self.i += size
+            return self.keep(n if sign == ord("+") else -n)
+        if t == "[":
+            arr = self.keep([])
+            arr.extend(self.read() for _ in range(self.long()))
+            return arr
+        if t == "{":
+            h = self.keep({})
+            for _ in range(self.long()):
+                k = self.read()
+                h[k if not isinstance(k, (list, dict)) else str(k)] = self.read()
+            return h
+        if t == "C":
+            name = self.sym()
+            inner = self.read()
+            return {"_class": name, "_value": inner}
+        if t == "o":
+            obj = self.keep({"_class": self.sym()})
+            for _ in range(self.long()):
+                k = self.sym()
+                obj[k] = self.read()
+            return obj
+        if t == "u":
+            name = self.sym()
+            raw = self.blob()
+            if name in ("Color", "Tone") and len(raw) == 32:
+                return self.keep([round(v) for v in struct.unpack("<4d", raw)])
+            return self.keep({"_class": name})
+        raise ValueError(f"Marshal: tipo {t!r} no soportado en {self.i}")
+
+
+def convert_animations(src: Path) -> None:
+    """Animaciones de combate de Essentials (PkmnAnimations.rxdata) a un JSON por animación."""
+    data = MiniMarshal((src / "Data" / "PkmnAnimations.rxdata").read_bytes()).read()
+    anims = data["@array"]
+    out = OUT / "animaciones"
+    (out / "graficos").mkdir(parents=True, exist_ok=True)
+    (out / "sonidos").mkdir(parents=True, exist_ok=True)
+    index, graphics, sounds = {}, set(), set()
+    for n, a in enumerate(anims):
+        if not isinstance(a, dict):
+            continue
+        name = (a.get("@name") or "").strip()
+        if not name.startswith(("Move:", "OppMove:", "Common:")):
+            continue
+        frames = []
+        for frame in a.get("@array") or []:
+            cells = []
+            for k, c in enumerate(frame or []):
+                if not c:
+                    continue
+                if k > 1 and not c[6]:
+                    continue  # invisible
+                # índice, x, y, zoomX, zoomY, ángulo, espejo, mezcla, visible, patrón, opacidad, prioridad,
+                # foco y color (r, g, b, a)
+                cells.append([k] + [round(c[i], 1) if isinstance(c[i], float) else (c[i] if c[i] is not None else d)
+                                    for i, d in ((0, 0), (1, 0), (2, 100), (11, 100), (3, 0), (4, 0), (5, 0), (6, 1),
+                                                 (7, 0), (8, 255), (25, 1), (26, 4), (12, 0), (13, 0), (14, 0), (15, 0))])
+            frames.append(cells)
+        timings = []
+        for tm in a.get("@timing") or []:
+            kind, res = tm.get("@timingType", 0), tm.get("@name") or ""
+            if kind == 0 and res:  # sonido
+                f = find_audio(src / "Audio" / "SE", res)
+                if f:
+                    sounds.add(f)
+                res = f.name if f else ""
+            elif kind in (1, 3) and res:  # imagen de fondo o de primer plano
+                f = find_image(src / "Graphics" / "Animations", re.sub(r"\.png$", "", res, flags=re.I))
+                if f:
+                    graphics.add(f)
+                res = f.name if f else ""
+            color = [tm.get(f"@color{c}") for c in ("Red", "Green", "Blue", "Alpha")]
+            # [frame, tipo, nombre, volumen, tono, duración, bgX, bgY, opacidad, [r, g, b, a]]
+            timings.append([tm.get("@frame", 0), kind, res, tm.get("@volume") or 100, tm.get("@pitch") or 100,
+                            tm.get("@duration") or 0, tm.get("@bgX"), tm.get("@bgY"), tm.get("@opacity"), color])
+        graphic = a.get("@graphic") or ""
+        img = find_image(src / "Graphics" / "Animations", re.sub(r"\.png$", "", graphic, flags=re.I)) if graphic else None
+        if img:
+            graphics.add(img)
+        anim = {"grafico": img.name if img else "", "frames": frames, "tiempos": timings}
+        (out / f"{n}.json").write_text(json.dumps(anim, separators=(",", ":")))
+        index[name] = n
+    for f in graphics:
+        shutil.copy(f, out / "graficos" / f.name)
+    for f in sounds:
+        shutil.copy(f, out / "sonidos" / f.name)
+    (out / "indice.json").write_text(json.dumps(index, ensure_ascii=False, separators=(",", ":")))
+    print(f"{len(index)} animaciones, {len(graphics)} gráficos, {len(sounds)} sonidos")
+
+
+BATTLE_SE = ["Battle ball drop", "Battle ball hit", "Battle ball shake", "Battle catch click", "Battle damage normal",
+             "Battle damage super", "Battle damage weak", "Battle flee", "Battle jump to ball", "Battle recall",
+             "Battle throw", "Open Pokeball"]
+BATTLE_ME = ["Pokemon Healing", "EvolutionSuccess"]
+# Gráficos de Poké Ball de Essentials (Graphics/Pictures/Battle/ballNN.png) para las que hay en el juego.
+BALL_PICTURES = {"POKEBALL": 0, "GREATBALL": 1, "ULTRABALL": 3}
+
+
+def copy_battle_extras(src: Path) -> None:
+    """Sonidos de combate y gráficos de las Poké Balls."""
+    out = OUT / "combate"
+    out.mkdir(parents=True, exist_ok=True)
+    for name in BATTLE_SE:
+        if f := find_audio(src / "Audio" / "SE", name):
+            shutil.copy(f, out / f"{name}{f.suffix.lower()}")
+    for name in BATTLE_ME:
+        if f := find_audio(src / "Audio" / "ME", name):
+            shutil.copy(f, out / f"{name}{f.suffix.lower()}")
+    pics = src / "Graphics" / "Pictures" / "Battle"
+    for ball, n in BALL_PICTURES.items():
+        for suffix in ("", "_open"):
+            if img := find_image(pics, f"ball{n:02d}{suffix}"):
+                shutil.copy(img, out / f"{ball}{suffix}.png")
+
+
+def find_audio(folder: Path, name: str) -> Path | None:
+    stem = Path(name).stem
+    for ext in (".ogg", ".wav", ".mp3"):
+        for cand in (folder / f"{stem}{ext}", folder / f"{name}"):
+            if cand.exists() and cand.suffix.lower() in (".ogg", ".wav", ".mp3"):
+                return cand
+    low = stem.lower()
+    for f in folder.iterdir():
+        if f.stem.lower() == low and f.suffix.lower() in (".ogg", ".wav", ".mp3"):
+            return f
+    return None
 
 
 # ------------------------------------------------------------------ main
@@ -371,7 +682,7 @@ def main(src: Path) -> None:
     if OUT.exists():
         shutil.rmtree(OUT)
     for sub in ("maps", "tilesets", "autotiles", "characters", "battlers/front", "battlers/back",
-                "battlebacks", "fonts", "data"):
+                "battlebacks", "trainers", "fonts", "data"):
         (OUT / sub).mkdir(parents=True, exist_ok=True)
 
     # Tilesets
@@ -393,6 +704,10 @@ def main(src: Path) -> None:
             "passages": Table(a["@passages"]), "priorities": Table(a["@priorities"]),
             "terrain": Table(a["@terrain_tags"]),
         }
+
+    # Entrenadores (se usan al convertir los eventos de los mapas)
+    TRAINER_TYPES.update(read_trainer_types(pbs))
+    TRAINERS.update(read_trainers(pbs))
 
     # Mapas
     infos = load(open(data_dir / "MapInfos.rxdata", "rb"))
@@ -430,6 +745,11 @@ def main(src: Path) -> None:
     for f in (gfx / "Battlebacks").iterdir():
         if f.suffix.lower() == ".png":
             shutil.copy(f, OUT / "battlebacks" / f.name)
+    # Sprites de combate de los entrenadores que aparecen en los mapas
+    for sid in sorted({e for m in mapas.values() for e in m.pop("entrenadores")}):
+        img = gfx / "Battlers" / "Trainers" / f"trainer{sid:03d}.png"
+        if img.exists():
+            shutil.copy(img, OUT / "trainers" / f"{sid}.png")
     for f in (src / "Fonts").glob("pkmnem*.ttf"):
         shutil.copy(f, OUT / "fonts" / f.name)
 
@@ -452,6 +772,8 @@ def main(src: Path) -> None:
         if credits.exists():
             shutil.copy(credits, OUT / "CREDITOS.txt")
             break
+    convert_animations(src)
+    copy_battle_extras(src)
     print(f"{len(mapas)} mapas, {len(graficos)} gráficos de personaje -> {OUT}")
 
 
