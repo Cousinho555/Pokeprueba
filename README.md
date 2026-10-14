@@ -79,4 +79,4 @@ Pokémon Essentials BES se distribuye bajo **CC BY-NC-SA 4.0**: este proyecto de
 4. **Mundo**: varios mapas conectados, NPCs con diálogos, eventos (equivalente a los eventos de RPG Maker).
 5. **Supabase**: inicio de sesión, guardado en la nube, Pokédex.
 6. **Online**: combates entre jugadores (Supabase Realtime + validación con el simulador) e intercambios.
-7. **Pulido**: música y efectos (los de `Audio/` de Essentials), animaciones de ataques, menús, móvil/táctil.
+7. **Pulido**: animaciones de ataques y estados de Essentials, lanzamiento de Poké Ball y efectos de sonido de combate (hecho). Pendiente: música de fondo, menús, móvil/táctil.

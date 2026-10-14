@@ -8,6 +8,8 @@ import {
 } from '../data/essentials';
 import { addCaught, bag, BALLS, party, progress, type PartyMember } from '../data/party';
 import { textStyle } from '../ui';
+import { AnimationPlayer, type Actor } from '../battle/animations';
+import { sfx } from './BootScene';
 
 export interface BattleData {
   /** Pokémon rivales: uno si es salvaje, el equipo entero si es un entrenador. */
@@ -61,6 +63,7 @@ export class BattleScene extends Phaser.Scene {
   private message!: Phaser.GameObjects.Text;
   private menuLayer!: Phaser.GameObjects.Container;
   private views = {} as Record<SideID, SideView>;
+  private anim!: AnimationPlayer;
   /** Índices dentro de `party` de los Pokémon que han entrado al combate. */
   private partyIndexes: number[] = [];
   private advance: (() => void) | null = null;
@@ -103,6 +106,7 @@ export class BattleScene extends Phaser.Scene {
 
     const mod = await import('../battle/engine');
     this.mod = mod;
+    this.anim = new AnimationPlayer(this);
     this.speciesNum = mod.speciesNum;
 
     // Solo combaten los Pokémon del equipo que no estén debilitados.
@@ -246,13 +250,28 @@ export class BattleScene extends Phaser.Scene {
           this.views[ev.side] = { sprite, info, hpBar, hpText, expBar, hp: ev.hp, maxhp: ev.maxhp };
           this.refreshExpBar(false);
           sprite.setScale(0);
+          sfx(this, ev.side === 'p1' || this.data_.trainer ? 'Open Pokeball' : 'Battle jump to ball', 0.5);
           this.tweens.add({ targets: sprite, scale: SPRITE_SCALE, duration: 250 });
           await this.setHP(ev.side, ev.hp, ev.maxhp, false);
           break;
         }
-        case 'hp':
+        case 'hp': {
+          const v = this.views[ev.side];
+          // Al recibir daño el Pokémon parpadea mientras baja la barra, como en Essentials.
+          if (v && ev.hp < v.hp) {
+            sfx(this, 'Battle damage normal');
+            this.tweens.add({ targets: v.sprite, alpha: 0, duration: 70, yoyo: true, repeat: 3 });
+          }
           await this.setHP(ev.side, ev.hp, ev.maxhp, true);
           break;
+        }
+        case 'anim': {
+          const actor = (side: SideID): Actor | undefined =>
+            this.views[side]?.sprite.active ? { sprite: this.views[side].sprite, scale: SPRITE_SCALE } : undefined;
+          const played = await this.anim.play(ev.name, actor(ev.user), actor(ev.target), ev.user === 'p2');
+          if (!played && ev.name.startsWith('Move:')) await this.lunge(ev.user);
+          break;
+        }
         case 'faint': {
           // La experiencia se reparte tras el mensaje de "se debilitó".
           if (ev.side === 'p2') this.expDue = this.data_.foes[this.foeSlot] ?? null;
@@ -264,6 +283,14 @@ export class BattleScene extends Phaser.Scene {
           break;
       }
     }
+  }
+
+  /** Efecto sencillo para los movimientos sin animación en Essentials: el Pokémon embiste. */
+  private lunge(side: SideID): Promise<void> {
+    const s = this.views[side]?.sprite;
+    if (!s) return Promise.resolve();
+    const dx = side === 'p1' ? 24 : -24;
+    return new Promise((r) => this.tweens.add({ targets: s, x: s.x + dx, y: s.y - dx / 2, duration: 90, yoyo: true, onComplete: () => r() }));
   }
 
   /** Muestra un mensaje y espera a que el jugador lo pase (o a que pase un rato). */
@@ -385,19 +412,26 @@ export class BattleScene extends Phaser.Scene {
     bag[ball] = (bag[ball] ?? 1) - 1;
     const foe = this.data_.foes[0];
     const sprite = this.views.p2?.sprite;
-    await this.say(`¡Has lanzado una ${info.nombre}!`);
-    if (sprite) await new Promise((r) => this.tweens.add({ targets: sprite, scale: 0, duration: 250, onComplete: r }));
+    this.message.setText(`¡Has lanzado una ${info.nombre}!`);
     const shakes = this.engine.tryCatch(especies[foe.interno]?.captura ?? 45, info.ratio);
-    for (let i = 0; i < Math.min(shakes, 3); i++) await this.say('...'.repeat(i + 1));
+    const ballImg = await this.throwBallAnim(ball, sprite, shakes);
 
     if (shakes >= 4) {
       await this.say(`¡Ya está! ¡Has atrapado a ${foe.nombre}!`);
+      ballImg.destroy();
       this.saveHP();
       const where = addCaught({ spec: { ...foe, movimientos: [...foe.movimientos] }, hp: this.engine.foeHP() });
       if (where === 'pc') await this.say(`Tu equipo está lleno. ${foe.nombre} se ha enviado al PC.`);
       return true;
     }
-    if (sprite) await new Promise((r) => this.tweens.add({ targets: sprite, scale: SPRITE_SCALE, duration: 200, onComplete: r }));
+    // El Pokémon se escapa: la Poké Ball se abre y vuelve a aparecer.
+    sfx(this, 'Battle recall');
+    if (this.textures.exists(`ballopen:${ball}`)) ballImg.setTexture(`ballopen:${ball}`);
+    if (sprite) {
+      sprite.setTint(0xffffff).setTintMode(Phaser.TintModes.MULTIPLY);
+      await new Promise((r) => this.tweens.add({ targets: sprite, scale: SPRITE_SCALE, alpha: 1, duration: 250, onComplete: r }));
+    }
+    ballImg.destroy();
     const fail = [
       '¡Oh, no! ¡El Pokémon se ha escapado!',
       '¡Vaya! ¡Parecía que lo había atrapado!',
@@ -408,6 +442,62 @@ export class BattleScene extends Phaser.Scene {
     this.engine.chooseBallTurn();
     await this.playEvents(this.engine.drainEvents());
     return false;
+  }
+
+  /**
+   * Lanzamiento como en Essentials: la Poké Ball vuela en arco hasta el Pokémon, se abre y
+   * lo absorbe, cae al suelo y se sacude. Devuelve la imagen de la Poké Ball (aún en pantalla).
+   */
+  private async throwBallAnim(ball: string, foe: Phaser.GameObjects.Image | undefined, shakes: number): Promise<Phaser.GameObjects.Image> {
+    const tween = (cfg: Phaser.Types.Tweens.TweenBuilderConfig) =>
+      new Promise<void>((r) => this.tweens.add({ ...cfg, onComplete: () => r() }));
+    const wait = (ms: number) => new Promise<void>((r) => this.time.delayedCall(ms, () => r()));
+    const key = this.textures.exists(`ball:${ball}`) ? `ball:${ball}` : 'ball:POKEBALL';
+    const fx = foe ? foe.x : FOE_X;
+    const fy = foe ? foe.y - foe.displayHeight / 2 : 110;
+    // El bitmap tiene hueco transparente debajo: el suelo está algo por debajo del centro visible.
+    const groundY = fy + 34;
+    const img = this.add.image(40, 250, key).setScale(SPRITE_SCALE).setDepth(30);
+
+    // Vuelo en arco
+    sfx(this, 'Battle throw');
+    await tween({
+      targets: img, duration: 550, angle: 720,
+      onUpdate: (tw: Phaser.Tweens.Tween) => {
+        const t = tw.progress;
+        img.setPosition(40 + (fx - 40) * t, 250 + (fy - 40 - 250) * t - Math.sin(t * Math.PI) * 120);
+      },
+    });
+    img.setAngle(0);
+
+    // Se abre y absorbe al Pokémon
+    sfx(this, 'Battle jump to ball');
+    if (this.textures.exists(`ballopen:${ball}`)) img.setTexture(`ballopen:${ball}`);
+    if (foe) {
+      foe.setTint(0xffffff).setTintMode(Phaser.TintModes.FILL);
+      await tween({ targets: foe, scale: 0, alpha: 0.4, duration: 300 });
+    }
+    img.setTexture(key);
+    await wait(150);
+
+    // Cae al suelo y bota
+    await tween({ targets: img, y: groundY, duration: 300, ease: 'Bounce.easeOut' });
+    sfx(this, 'Battle ball drop');
+    await wait(400);
+
+    // Sacudidas
+    for (let i = 0; i < Math.min(shakes, 3); i++) {
+      sfx(this, 'Battle ball shake');
+      await tween({ targets: img, angle: { from: 0, to: -25 }, duration: 120, yoyo: true });
+      await tween({ targets: img, angle: { from: 0, to: 25 }, duration: 120, yoyo: true });
+      await wait(450);
+    }
+    if (shakes >= 4) {
+      sfx(this, 'Battle catch click');
+      img.setTint(0x909090);
+      await wait(500);
+    }
+    return img;
   }
 
   // ---------------------------------------------------------------- experiencia
@@ -451,6 +541,7 @@ export class BattleScene extends Phaser.Scene {
       evolve(spec, target);
       if (member.hp != null) member.hp += this.mod.maxHP(spec) - oldMax;
       this.refreshPlayerBox(member);
+      sfx(this, 'EvolutionSuccess');
       await this.say(`¡Enhorabuena! ¡Tu ${oldName} ha evolucionado en ${spec.nombre}!`);
       for (const mv of movesLearnedAt(spec.interno, spec.nivel)) await this.learnMove(member, mv);
     }

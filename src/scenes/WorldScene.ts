@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { ESS, encounterChance, mundo, rollEncounter, trainerTeam, type Entrenador, type InfoMapa, type PokemonSpec } from '../data/essentials';
 import { bag, BALLS, healParty, party, partyCanFight, pc, progress } from '../data/party';
 import { saveGame } from '../data/save';
+import { sfx } from './BootScene';
 import { textStyle } from '../ui';
 import type { DialogData } from './DialogScene';
 import type { BattleData, BattleResult } from './BattleScene';
@@ -366,12 +367,13 @@ export class WorldScene extends Phaser.Scene {
     this.say(intro, () => {
       this.busy = true;
       healParty();
+      sfx(this, 'Pokemon Healing');
       // Si pierdes un combate, vuelves aquí.
       progress.regreso = { mapId: this.mapId, x: this.tileX, y: this.tileY, dir: this.facing };
       const cam = this.cameras.main;
       cam.flash(300, 255, 255, 255);
       this.time.delayedCall(400, () => cam.flash(300, 255, 255, 255));
-      this.time.delayedCall(900, () => {
+      this.time.delayedCall(2400, () => {
         saveGame({ mapId: this.mapId, x: this.tileX, y: this.tileY, dir: this.facing });
         this.say(['Gracias por esperar.', 'Tu equipo Pokémon ha recuperado toda su energía.', '¡Esperamos volver a verte!']);
       });

@@ -3,6 +3,17 @@ import { ESS, registerEssentials, type Especie, type Mundo } from '../data/essen
 import { initParty } from '../data/party';
 import { loadGame } from '../data/save';
 
+const SOUNDS = [
+  'Battle ball drop', 'Battle ball hit', 'Battle ball shake', 'Battle catch click', 'Battle damage normal',
+  'Battle damage super', 'Battle damage weak', 'Battle flee', 'Battle jump to ball', 'Battle recall',
+  'Battle throw', 'Open Pokeball', 'Pokemon Healing', 'EvolutionSuccess',
+];
+
+/** Reproduce un sonido de Essentials si está cargado. */
+export function sfx(scene: Phaser.Scene, name: string, volume = 0.7): void {
+  if (scene.cache.audio.exists(`sfx:${name}`)) scene.sound.play(`sfx:${name}`, { volume });
+}
+
 /** Carga los datos de Essentials, la fuente y el jugador antes de entrar al mundo. */
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -18,6 +29,12 @@ export class BootScene extends Phaser.Scene {
     this.load.json('mundo', `${ESS}data/mundo.json`);
     this.load.json('especies', `${ESS}data/especies.json`);
     this.load.json('movimientos', `${ESS}data/movimientos.json`);
+    // Sonidos de combate, del Centro Pokémon y de la evolución (los de los ataques se cargan al usarlos).
+    for (const name of SOUNDS) this.load.audio(`sfx:${name}`, `${ESS}combate/${encodeURIComponent(name)}.ogg`);
+    for (const ball of ['POKEBALL', 'GREATBALL', 'ULTRABALL']) {
+      this.load.image(`ball:${ball}`, `${ESS}combate/${ball}.png`);
+      this.load.image(`ballopen:${ball}`, `${ESS}combate/${ball}_open.png`);
+    }
   }
 
   async create(): Promise<void> {

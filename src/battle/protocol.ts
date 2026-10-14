@@ -10,7 +10,17 @@ export type BattleEvent =
   | { kind: 'hp'; side: SideID; hp: number; maxhp: number }
   | { kind: 'switch'; side: SideID; name: string; species: string; level: number; hp: number; maxhp: number }
   | { kind: 'faint'; side: SideID }
+  /** Animación de Essentials: "Move:EMBER" (con quien la usa y a quién) o "Common:Burn". */
+  | { kind: 'anim'; name: string; user: SideID; target: SideID }
   | { kind: 'end'; winner: SideID | null };
+
+/** Animaciones comunes de Essentials para cada problema de estado. */
+const STATUS_ANIM: Record<string, string> = {
+  brn: 'Common:Burn', par: 'Common:Paralysis', psn: 'Common:Poison', tox: 'Common:Poison',
+  slp: 'Common:Sleep', frz: 'Common:Frozen', confusion: 'Common:Confusion',
+};
+
+const toId = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 const STATS: Record<string, string> = {
   atk: 'el Ataque', def: 'la Defensa', spa: 'el Ataque Especial', spd: 'la Defensa Especial',
@@ -84,13 +94,26 @@ export class ProtocolTranslator {
           : this.wild ? `¡Un ${name} salvaje apareció!` : `¡${this.foeTrainer} saca a ${name}!`;
         return [{ kind: 'switch', side, name, species, level, hp, maxhp }, text(msg)];
       }
-      case 'move':
-        return [text(`¡${this.who(a, true)} usó ${this.moveName(b)}!`)];
+      case 'move': {
+        const out: BattleEvent[] = [text(`¡${this.who(a, true)} usó ${this.moveName(b)}!`)];
+        // "[still]" (turno de carga) y "[miss]"/"[notarget]" no llevan animación.
+        if (!p.slice(4).some((x) => /\[(still|miss|notarget)\]/.test(x))) {
+          const user = this.side(a);
+          const target = c?.startsWith('p') ? this.side(c) : user;
+          out.push({ kind: 'anim', name: `Move:${toId(b).toUpperCase()}`, user, target });
+        }
+        return out;
+      }
       case '-damage':
       case '-heal':
       case '-sethp': {
         const { hp, maxhp } = parseHP(b);
-        const ev: BattleEvent[] = [{ kind: 'hp', side: this.side(a), hp, maxhp }];
+        const ev: BattleEvent[] = [];
+        const from = p.find((x) => x.startsWith('[from]'))?.replace(/\[from\]\s*/, '');
+        const side = this.side(a);
+        if (from && STATUS_ANIM[from]) ev.push({ kind: 'anim', name: STATUS_ANIM[from], user: side, target: side });
+        if (cmd === '-heal') ev.push({ kind: 'anim', name: 'Common:HealthUp', user: side, target: side });
+        ev.push({ kind: 'hp', side, hp, maxhp });
         if (cmd === '-heal') ev.push(text(`${this.who(a, true)} recuperó PS.`));
         return ev;
       }
@@ -115,17 +138,24 @@ export class ProtocolTranslator {
           ? `no puede ${up ? 'subir' : 'bajar'} más`
           : up ? (n > 1 ? 'subió mucho' : 'subió') : (n > 1 ? 'bajó mucho' : 'bajó');
         const msg = `${stat} de ${this.who(a)} ${verb}`;
-        return [text(`¡${msg[0].toUpperCase()}${msg.slice(1)}!`)];
+        const side = this.side(a);
+        const anim: BattleEvent[] = n ? [{ kind: 'anim', name: up ? 'Common:StatUp' : 'Common:StatDown', user: side, target: side }] : [];
+        return [...anim, text(`¡${msg[0].toUpperCase()}${msg.slice(1)}!`)];
       }
-      case '-status':
-        return [text(`¡${this.who(a, true)} ${STATUS[b] ?? b}!`)];
+      case '-status': {
+        const side = this.side(a);
+        const anim: BattleEvent[] = STATUS_ANIM[b] ? [{ kind: 'anim', name: STATUS_ANIM[b], user: side, target: side }] : [];
+        return [...anim, text(`¡${this.who(a, true)} ${STATUS[b] ?? b}!`)];
+      }
       case '-curestatus':
         return [text(`${this.who(a, true)} ya no tiene problemas de estado.`)];
       case 'cant': {
         const reason: Record<string, string> = {
           par: 'está paralizado. ¡No se puede mover!', slp: 'está dormido.', frz: 'está congelado.',
         };
-        return [text(`¡${this.who(a, true)} ${reason[b] ?? 'no se puede mover'}!`)];
+        const side = this.side(a);
+        const anim: BattleEvent[] = STATUS_ANIM[b] ? [{ kind: 'anim', name: STATUS_ANIM[b], user: side, target: side }] : [];
+        return [...anim, text(`¡${this.who(a, true)} ${reason[b] ?? 'no se puede mover'}!`)];
       }
       case 'faint':
         return [{ kind: 'faint', side: this.side(a) }, text(`¡${this.who(a, true)} se debilitó!`)];
