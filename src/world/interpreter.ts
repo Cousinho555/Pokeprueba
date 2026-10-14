@@ -61,6 +61,8 @@ export interface EventHost extends CharacterHost {
   shake(power: number, ms: number): void;
   /** Muestra el "!" sobre un personaje. */
   exclaim(ch: Character): Promise<void>;
+  /** Grito de un Pokémon (nombre interno de la especie, p. ej. PIKACHU). */
+  cry(species: string): void;
   setRespawn(): void;
   shop(items: string[]): Promise<void>;
   openPC(): Promise<void>;
@@ -387,6 +389,15 @@ export class Interpreter {
     if ((m = s.match(/pbNoticePlayer\(get_character\((-?\d+)\)\)/))) {
       const ch = h.character(Number(m[1]), this.eventId);
       if (ch) await notice(h, ch);
+      return true;
+    }
+    if ((m = s.match(/pbExclaim\(get_character\((-?\d+)\)\)/))) {
+      const ch = h.character(Number(m[1]), this.eventId);
+      if (ch) await h.exclaim(ch);
+      return true;
+    }
+    if ((m = s.match(new RegExp(String.raw`pbPlayCry\(${sym}`)))) {
+      h.cry(m[1]);
       return true;
     }
     if (/pbSetPokemonCenter/.test(s)) {

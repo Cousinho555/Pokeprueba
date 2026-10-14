@@ -1,0 +1,20 @@
+{
+  "inicio": { "mapa": 900, "x": 7, "y": 8, "dir": 8 },
+  "interruptor": 100,
+  "mapas": {
+    "900": {
+      "id": 900,
+      "nombre": "???",
+      "ancho": 15,
+      "alto": 11,
+      "tileset": 4,
+      "autotiles": 4,
+      "imagen": "Poke Centre interior.png",
+      "bgm": "",
+      "graficos": ["Pokemon 01"],
+      "exterior": false,
+      "fondoCombate": "IndoorB",
+      "archivo": "assets/historia/maps/intro.tmj"
+    }
+  }
+}

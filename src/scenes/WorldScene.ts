@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { ESS, encounterChance, mundo, objetos, rollEncounter, trainerTeam, type Entrenador, type InfoMapa, type PokemonSpec } from '../data/essentials';
+import { especies, ESS, encounterChance, mundo, objetos, rollEncounter, trainerTeam, type Entrenador, type InfoMapa, type PokemonSpec } from '../data/essentials';
 import { addItem, healParty, partyCanFight, pc, progress } from '../data/party';
 import { saveGame } from '../data/save';
 import { sfx } from './BootScene';
@@ -68,6 +68,8 @@ export class WorldScene extends Phaser.Scene implements EventHost {
   private toneRect?: Phaser.GameObjects.Rectangle;
   private mapAnims!: MapAnimations;
   private lastBump = 0;
+  /** Mapas oscuros: halo de luz bajo cada personaje que tenga gráfico. */
+  private halos?: Map<Character, Phaser.GameObjects.Image>;
 
   constructor() {
     super('World');
@@ -91,6 +93,7 @@ export class WorldScene extends Phaser.Scene implements EventHost {
     this.locks = 1;
     this.leaving = false;
     this.toneRect = undefined;
+    this.halos = undefined;
   }
 
   create(data: WorldData): void {
@@ -99,7 +102,8 @@ export class WorldScene extends Phaser.Scene implements EventHost {
     const need = (key: string, add: () => void) => {
       if (!this.textures.exists(key) && !this.cache.tilemap.exists(key)) add();
     };
-    need(mapKey(this.mapId), () => this.load.tilemapTiledJSON(mapKey(this.mapId), `${ESS}maps/map${String(this.mapId).padStart(3, '0')}.tmj`));
+    const file = this.info.archivo ?? `${ESS}maps/map${String(this.mapId).padStart(3, '0')}.tmj`;
+    need(mapKey(this.mapId), () => this.load.tilemapTiledJSON(mapKey(this.mapId), file));
     need(`ts:${this.info.imagen}`, () => this.load.image(`ts:${this.info.imagen}`, `${ESS}tilesets/${encodeURIComponent(this.info.imagen)}`));
     need(`at:${this.info.autotiles}`, () => this.load.image(`at:${this.info.autotiles}`, `${ESS}autotiles/${this.info.autotiles}.png`));
     for (const g of [mundo.jugador, ...this.info.graficos]) {
@@ -125,6 +129,7 @@ export class WorldScene extends Phaser.Scene implements EventHost {
     const props = Object.fromEntries((map.properties as { name: string; value: string }[]).map((p) => [p.name, p.value]));
     this.pasos = props.pasos ?? '';
     this.terreno = props.terreno ?? '';
+    if (props.oscuro) this.halos = new Map();
 
     this.mapAnims = new MapAnimations(this);
     this.player = new Character(this, this.startPos.x, this.startPos.y, this.startPos.dir);
@@ -279,6 +284,7 @@ export class WorldScene extends Phaser.Scene implements EventHost {
 
   update(time: number): void {
     if (!this.player?.sprite) return;
+    if (this.halos) this.updateHalos();
     this.moveEvents(time);
     if (this.player.moving || this.busy) return;
     const dir = this.heldDir();
@@ -310,6 +316,30 @@ export class WorldScene extends Phaser.Scene implements EventHost {
     }
     // Como en RMXP: chocar con un evento de contacto lo activa (puertas, salidas sobre muros).
     this.touch(nx, ny);
+  }
+
+  /** En la oscuridad solo se ven los personajes, cada uno con un halo tenue a sus pies. */
+  private updateHalos(): void {
+    if (!this.textures.exists('luz')) {
+      const size = 160;
+      const tex = this.textures.createCanvas('luz', size, size)!;
+      const ctx = tex.getContext();
+      const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+      g.addColorStop(0, 'rgba(255, 244, 200, 0.35)');
+      g.addColorStop(0.5, 'rgba(255, 236, 170, 0.12)');
+      g.addColorStop(1, 'rgba(255, 230, 160, 0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, size, size);
+      tex.refresh();
+    }
+    const chars = [this.player, ...this.mapEvents.filter((e) => !e.erased).map((e) => e.ch)];
+    for (const ch of chars) {
+      let light = this.halos!.get(ch);
+      if (!light) this.halos!.set(ch, (light = this.add.image(0, 0, 'luz').setBlendMode(Phaser.BlendModes.ADD)));
+      const s = ch.sprite;
+      light.setVisible(!!s?.visible);
+      if (s) light.setPosition(s.x, s.y - 12).setDepth(s.depth - 0.01);
+    }
   }
 
   /** Movimiento autónomo de los eventos: aleatorio o hacia el jugador. */
@@ -574,6 +604,18 @@ export class WorldScene extends Phaser.Scene implements EventHost {
     if (!sprite) return Promise.resolve();
     // Bocadillo "!" de Essentials sobre la cabeza.
     return this.mapAnims.play('exclamacion', sprite.x, sprite.y, sprite.y - sprite.height, 20000).then(() => this.wait(150));
+  }
+
+  cry(species: string): void {
+    const num = especies[species]?.num;
+    if (!num) return;
+    const key = `cry:${num}`;
+    if (this.cache.audio.exists(key)) return void this.sound.play(key, { volume: 0.6 });
+    this.load.audio(key, `${ESS}combate/gritos/${num}.ogg`);
+    this.load.once(Phaser.Loader.Events.COMPLETE, () => {
+      if (this.cache.audio.exists(key)) this.sound.play(key, { volume: 0.6 });
+    });
+    this.load.start();
   }
 
   setRespawn(): void {

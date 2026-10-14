@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
-import { ESS, registerEssentials, type Especie, type Mundo } from '../data/essentials';
-import { initParty } from '../data/party';
+import { ESS, registerEssentials, type Especie, type InfoMapa, type Mundo } from '../data/essentials';
+import { initParty, progress } from '../data/party';
 import { loadGame } from '../data/save';
 import { UI } from '../ui';
 
@@ -10,6 +10,14 @@ const SOUNDS = [
   'Battle throw', 'Open Pokeball', 'Pokemon Healing', 'EvolutionSuccess', 'Jingle - HMTM', 'Pkmn exp gain',
   'Pkmn exp full', 'Pkmn faint', 'Player jump', 'Player bump', 'Door enter', 'Door exit',
 ];
+
+/** Contenido propio de la historia: mapas extra y dónde empieza una partida nueva. */
+interface Historia {
+  inicio: { mapa: number; x: number; y: number; dir: number };
+  /** Interruptor que se activa al terminar la introducción. */
+  interruptor: number;
+  mapas: Record<string, InfoMapa>;
+}
 
 /** Reproduce un sonido de Essentials si está cargado. */
 export function sfx(scene: Phaser.Scene, name: string, volume = 0.7): void {
@@ -29,6 +37,7 @@ export class BootScene extends Phaser.Scene {
     this.load.on('progress', (v: number) => (bar.width = 200 * v));
 
     this.load.json('mundo', `${ESS}data/mundo.json`);
+    this.load.json('historia', 'assets/historia/historia.json');
     this.load.json('especies', `${ESS}data/especies.json`);
     this.load.json('movimientos', `${ESS}data/movimientos.json`);
     this.load.json('objetos', `${ESS}data/objetos.json`);
@@ -50,6 +59,9 @@ export class BootScene extends Phaser.Scene {
 
   async create(): Promise<void> {
     const mundo = this.cache.json.get('mundo') as Mundo;
+    // Mapas propios de la historia (no vienen de Essentials).
+    const historia = this.cache.json.get('historia') as Historia | undefined;
+    Object.assign(mundo.mapas, historia?.mapas ?? {});
     registerEssentials(mundo, this.cache.json.get('especies') as Record<string, Especie>, this.cache.json.get('movimientos'), this.cache.json.get('objetos'));
     initParty();
     const saved = loadGame();
@@ -63,6 +75,10 @@ export class BootScene extends Phaser.Scene {
 
     if (saved && mundo.mapas[saved.mapId]) {
       this.scene.start('World', { ...saved, say: ['Partida cargada. Pulsa Esc o X para abrir el menú.'] });
+    } else if (historia && !progress.interruptores[historia.interruptor]) {
+      // Partida nueva: empieza la escena de introducción.
+      const { mapa, x, y, dir } = historia.inicio;
+      this.scene.start('World', { mapId: mapa, x, y, dir, say: ['(Muévete con las flechas y habla con Z o Intro.)'] });
     } else {
       const { mapa, x, y, dir } = mundo.inicio;
       this.scene.start('World', { mapId: mapa, x, y, dir, say: ['¡Bienvenido! Pulsa Esc o X para abrir el menú: equipo, mochila, monedero...'] });

@@ -32,6 +32,8 @@ export interface InfoMapa {
   exterior: boolean;
   fondoCombate: string;
   curacion?: [number, number, number];
+  /** Ruta del .tmj si el mapa no es de Essentials (mapas propios de la historia). */
+  archivo?: string;
 }
 
 /** Entrenador de un combate de un evento (pbTrainerBattle o customTrainerBattle). */
