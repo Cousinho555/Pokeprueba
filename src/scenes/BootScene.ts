@@ -6,7 +6,7 @@ import { loadGame } from '../data/save';
 const SOUNDS = [
   'Battle ball drop', 'Battle ball hit', 'Battle ball shake', 'Battle catch click', 'Battle damage normal',
   'Battle damage super', 'Battle damage weak', 'Battle flee', 'Battle jump to ball', 'Battle recall',
-  'Battle throw', 'Open Pokeball', 'Pokemon Healing', 'EvolutionSuccess',
+  'Battle throw', 'Open Pokeball', 'Pokemon Healing', 'EvolutionSuccess', 'Jingle - HMTM',
 ];
 
 /** Reproduce un sonido de Essentials si está cargado. */
@@ -29,6 +29,7 @@ export class BootScene extends Phaser.Scene {
     this.load.json('mundo', `${ESS}data/mundo.json`);
     this.load.json('especies', `${ESS}data/especies.json`);
     this.load.json('movimientos', `${ESS}data/movimientos.json`);
+    this.load.json('objetos', `${ESS}data/objetos.json`);
     // Sonidos de combate, del Centro Pokémon y de la evolución (los de los ataques se cargan al usarlos).
     for (const name of SOUNDS) this.load.audio(`sfx:${name}`, `${ESS}combate/${encodeURIComponent(name)}.ogg`);
     for (const ball of ['POKEBALL', 'GREATBALL', 'ULTRABALL']) {
@@ -39,7 +40,7 @@ export class BootScene extends Phaser.Scene {
 
   async create(): Promise<void> {
     const mundo = this.cache.json.get('mundo') as Mundo;
-    registerEssentials(mundo, this.cache.json.get('especies') as Record<string, Especie>, this.cache.json.get('movimientos'));
+    registerEssentials(mundo, this.cache.json.get('especies') as Record<string, Especie>, this.cache.json.get('movimientos'), this.cache.json.get('objetos'));
     initParty();
     const saved = loadGame();
 

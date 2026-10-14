@@ -39,7 +39,11 @@ src/
     BootScene.ts       carga de datos de Essentials y fuente
     WorldScene.ts      mapas, movimiento, eventos, puertas, conexiones y encuentros
     BattleScene.ts     interfaz de combate
-    DialogScene.ts     caja de texto del mundo
+    DialogScene.ts     caja de texto del mundo, con opciones (Sí/No, tiendas)
+  world/
+    character.ts       personajes del mapa (jugador y eventos): pasos, saltos, gráficos
+    interpreter.ts     intérprete de eventos de RPG Maker XP y scripts de Essentials
+    text.ts            códigos de los mensajes (\PN, \v[n], colores)
   battle/
     engine.ts          envoltorio de @pkmn/sim (jugador vs IA)
     protocol.ts        traduce el protocolo de Showdown a eventos y textos en español
@@ -65,7 +69,15 @@ El script lee `Data/` (mapas `.rxdata`, tilesets), `Graphics/` y `PBS/`, y lo re
 
 Cada mapa convertido es un `.tmj` que se abre en Tiled. Las capas `Suelo*` van debajo del jugador y las `Alto*` por encima; la capa `Eventos` guarda puertas, NPCs y textos. La colisión y el terreno (hierba, bordillos, agua) van precalculados en las propiedades `pasos` y `terreno` del mapa, así que si editas un mapa a mano en Tiled esas propiedades no se actualizan solas.
 
-De momento los eventos solo entienden: mostrar texto (hasta la primera elección o condición), transferir al jugador y la dirección/gráfico de la primera página. Los scripts de Ruby (combates de entrenador, regalos, etc.) se ignoran.
+Los eventos se exportan completos (todas sus páginas y comandos) y el juego los ejecuta como RPG Maker XP, así que la historia se crea en el editor de eventos de RPG Maker y basta con volver a importar. El intérprete entiende:
+
+- Páginas con condiciones (interruptores, variable, interruptor local) y disparadores (botón de acción, contacto, automático, proceso paralelo).
+- Mensajes, opciones (Sí/No y listas), condiciones y ramas, bucles, etiquetas, esperas, interruptores, variables, interruptores locales, dinero y objetos.
+- Transferir al jugador, rutas de movimiento (pasos, giros, saltos, velocidad, cambio de gráfico, sonidos), mover eventos, transparencia, tono de pantalla, destellos y temblores, efectos de sonido y curar al equipo.
+- Movimiento autónomo de los NPCs (aleatorio, hacia el jugador o ruta personalizada).
+- Scripts habituales de Essentials: combates de entrenador (`pbTrainerBattle`, con la vista de los `Trainer(n)`), `pbNoticePlayer`, `pbItemBall`, `pbReceiveItem`, `pbAddPokemon`, `pbPokemonMart` (tienda), `pbConfirmMessage`, `pbSetPokemonCenter`, `pbSet`, `setTempSwitchOn`, `pbSetSelfSwitch`, `pbEraseThisEvent` y condiciones con `$game_switches`, `$game_variables`, dinero y mochila.
+
+Lo que todavía no entiende (música, imágenes, otros scripts) se salta y se avisa una vez en la consola del navegador con `[eventos]`, para saber qué falta.
 
 ### Créditos y licencia de los recursos
 
@@ -76,7 +88,7 @@ Pokémon Essentials BES se distribuye bajo **CC BY-NC-SA 4.0**: este proyecto de
 1. **Base jugable** (hecho): mapa, movimiento, encuentros y combate.
 2. **Recursos de Pokémon Essentials BES** (hecho): mapas, tilesets, personajes, sprites y datos en español.
 3. **Progresión** (hecho): experiencia, subida de nivel, aprender movimientos, evolución por nivel, captura con Poké Balls, mochila, guardado local, Centro Pokémon (la enfermera cura y es donde vuelves al perder) y entrenadores de los mapas de Essentials (te ven, vienen a por ti y dan dinero). Pendiente: tiendas y objetos curativos.
-4. **Mundo**: varios mapas conectados, NPCs con diálogos, eventos (equivalente a los eventos de RPG Maker).
+4. **Mundo**: intérprete de eventos de RPG Maker XP (hecho): la historia se crea en el editor de eventos de Essentials. Pendiente: música, imágenes y más scripts de Essentials según se vayan necesitando.
 5. **Supabase**: inicio de sesión, guardado en la nube, Pokédex.
 6. **Online**: combates entre jugadores (Supabase Realtime + validación con el simulador) e intercambios.
 7. **Pulido**: animaciones de ataques y estados de Essentials, lanzamiento de Poké Ball y efectos de sonido de combate (hecho). Pendiente: música de fondo, menús, móvil/táctil.

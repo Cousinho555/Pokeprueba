@@ -14,8 +14,10 @@ interface SaveData {
   bag: Record<string, number>;
   pos: Position;
   dinero?: number;
-  vencidos?: string[];
   regreso?: Position | null;
+  interruptores?: Record<number, boolean>;
+  variables?: Record<number, number>;
+  locales?: Record<string, boolean>;
 }
 
 let lastPos: Position | null = null;
@@ -43,8 +45,10 @@ export function loadGame(): Position | null {
     for (const k of Object.keys(bag)) delete bag[k];
     Object.assign(bag, data.bag ?? {});
     progress.dinero = data.dinero ?? progress.dinero;
-    progress.vencidos = data.vencidos ?? [];
     progress.regreso = data.regreso ?? null;
+    progress.interruptores = data.interruptores ?? {};
+    progress.variables = data.variables ?? {};
+    progress.locales = data.locales ?? {};
     lastPos = data.pos;
     return data.pos;
   } catch {
