@@ -80,9 +80,13 @@ Los eventos se exportan completos (todas sus páginas y comandos) y el juego los
 - Mensajes, opciones (Sí/No y listas), condiciones y ramas, bucles, etiquetas, esperas, interruptores, variables, interruptores locales, dinero y objetos.
 - Transferir al jugador, rutas de movimiento (pasos, giros, saltos, velocidad, cambio de gráfico, sonidos), mover eventos, transparencia, tono de pantalla, destellos y temblores, efectos de sonido y curar al equipo.
 - Movimiento autónomo de los NPCs (aleatorio, hacia el jugador o ruta personalizada).
-- Scripts habituales de Essentials: combates de entrenador (`pbTrainerBattle`, con la vista de los `Trainer(n)`), `pbNoticePlayer`, `pbItemBall`, `pbReceiveItem`, `pbAddPokemon`, `pbPokemonMart` (tienda), `pbConfirmMessage`, `pbSetPokemonCenter`, `pbSet`, `setTempSwitchOn`, `pbSetSelfSwitch`, `pbEraseThisEvent` y condiciones con `$game_switches`, `$game_variables`, dinero y mochila.
+- Scripts habituales de Essentials: combates de entrenador (`pbTrainerBattle`, con la vista de los `Trainer(n)`), `pbNoticePlayer`, `pbExclaim`, `pbPlayCry`, `pbItemBall`, `pbReceiveItem`, `pbAddPokemon`, `pbPokemonMart` (tienda), `pbConfirmMessage`, `pbSetPokemonCenter`, `pbSet`, `setTempSwitchOn`, `pbSetSelfSwitch`, `pbEraseThisEvent` y condiciones con `$game_switches`, `$game_variables`, dinero y mochila.
 
 Lo que todavía no entiende (música, imágenes, otros scripts) se salta y se avisa una vez en la consola del navegador con `[eventos]`, para saber qué falta.
+
+### Mapas propios de la historia
+
+`public/assets/historia/` guarda mapas que no vienen de Essentials, con el mismo formato que los importados (Tiled `.tmj` con los eventos en la capa `Eventos`). `historia.json` los registra y dice dónde empieza una partida nueva: ahora, la introducción a oscuras con Pikachu (mapa 900), que activa el interruptor 100 al terminar y lleva a la casa. Un mapa con la propiedad `oscuro` se ve negro, con un halo de luz bajo cada personaje.
 
 ### Créditos y licencia de los recursos
 
